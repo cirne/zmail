@@ -39,3 +39,7 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Agent scratch space — keep the directory, ignore contents
+/tmp/*
+!/tmp/.gitkeep
