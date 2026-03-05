@@ -70,7 +70,7 @@ const res = await fetch("http://localhost:11434/api/embeddings", {
 1. **Add `@huggingface/transformers` dependency.**
 2. **Replace `src/search/embeddings.ts`** — swap `embedText` and `embedBatch` implementations. Keep the same function signatures; no callers need to change.
 3. **Update `src/search/indexing.ts`** — use the BGE document encoding (no prefix) for index-time calls.
-4. **Re-index all emails** — existing LanceDB embeddings are in a different vector space (1536-dim OpenAI) and are incompatible. Drop and rebuild: `rm -rf data/vectors/` then run `zmail sync` or a backfill command. The SQLite `embedding_state` column will drive re-indexing automatically if rows are reset to `pending`.
+4. **Re-index all emails** — existing LanceDB embeddings are in a different vector space (1536-dim OpenAI) and are incompatible. Drop and rebuild: `rm -rf ~/.zmail/data/vectors/` then run `zmail sync` or a backfill command. The SQLite `embedding_state` column will drive re-indexing automatically if rows are reset to `pending`.
 5. **Remove `OPENAI_API_KEY` as a hard requirement** — it should only be needed if the user has opted into OpenAI embeddings or uses other OpenAI features (e.g. vision API for attachment OCR).
 6. **Update `ARCHITECTURE.md` ADR-006** — record the decision to switch default embedding to local model.
 7. **Update `.env.example`** — `OPENAI_API_KEY` becomes optional, document what it's still used for.

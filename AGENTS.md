@@ -32,7 +32,7 @@ src/
 ## Development rules
 
 - Never commit email data, credentials, or `.db` files.
-- **No migrations.** Schema is applied on DB creation. For schema changes: run manual `ALTER TABLE` / SQL against the live DB to save a resync. Full reset (`rm -rf data/` + resync) also works. Do not create or maintain migration files.
+- **No migrations.** Schema is applied on DB creation. For schema changes: run manual `ALTER TABLE` / SQL against the live DB to save a resync. Full reset (`rm -rf ~/.zmail/data/` + resync) also works. Do not create or maintain migration files.
 - When testing search, **use the standard search interface** (`search(db, { query })` from `~/search` or the web route). Do not query the DB directly unless debugging or explicitly asked.
 
 ## Commands

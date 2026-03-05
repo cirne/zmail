@@ -12,8 +12,10 @@ describe("config", () => {
       expect(config.imap.port).toBe(993);
     });
 
-    it("defaults DATA_DIR to ./data", () => {
-      expect(config.dataDir).toBe("./data");
+    it("defaults DATA_DIR to ~/.zmail/data", () => {
+      // Should expand tilde to actual home directory
+      expect(config.dataDir).toContain(".zmail/data");
+      expect(config.dataDir).not.toContain("~");
     });
 
     it("defaults PORT to 3000", () => {

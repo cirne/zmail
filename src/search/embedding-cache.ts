@@ -1,11 +1,22 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { homedir } from "node:os";
 
 const MODEL_ID = "text-embedding-3-small";
 
 function hashInput(input: string): string {
   return createHash("sha256").update(input, "utf8").digest("hex");
+}
+
+/**
+ * Expands tilde (~) to home directory in paths.
+ */
+function expandTilde(path: string): string {
+  if (path.startsWith("~/")) {
+    return join(homedir(), path.slice(2));
+  }
+  return path;
 }
 
 function cacheFilePath(cacheDir: string, modelId: string, input: string): string {
@@ -24,7 +35,8 @@ export async function getCachedEmbedding(
   input: string
 ): Promise<number[] | null> {
   if (!cacheDir) return null;
-  const path = cacheFilePath(resolve(cacheDir), modelId, input);
+  const expanded = expandTilde(cacheDir);
+  const path = cacheFilePath(resolve(expanded), modelId, input);
   try {
     const raw = await readFile(path, "utf8");
     const arr = JSON.parse(raw) as number[];
@@ -45,13 +57,14 @@ export async function setCachedEmbedding(
   embedding: number[]
 ): Promise<void> {
   if (!cacheDir) return;
-  const root = resolve(cacheDir);
+  const expanded = expandTilde(cacheDir);
+  const root = resolve(expanded);
   const dir = join(root, modelId);
+  // Ensure directory exists before writing
   await mkdir(dir, { recursive: true });
   const path = join(dir, `${hashInput(input)}.json`);
   const tmp = join(dir, `.tmp.${hashInput(input)}.${Date.now()}.json`);
   await writeFile(tmp, JSON.stringify(embedding), "utf8");
-  await mkdir(dir, { recursive: true });
   await rename(tmp, path);
 }
 

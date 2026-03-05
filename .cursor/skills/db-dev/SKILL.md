@@ -11,7 +11,7 @@ description: Reset and manage the local SQLite database and data dir at dev time
 
 ## Where data lives
 
-- **Root:** `DATA_DIR` (default `./data`). Canonical list: `.env.example` (see AGENTS.md).
+- **Root:** `DATA_DIR` (default `~/.zmail/data`). Canonical list: `.env.example` (see AGENTS.md).
 - **DB:** `DATA_DIR/zmail.db` (and WAL files `-shm`, `-wal`).
 - **Maildir:** `DATA_DIR/maildir/` (raw .eml in `cur/`, `new/`, `tmp/`).
 - **Sync state:** Stored inside the DB (`sync_state`, `sync_summary`).
@@ -23,13 +23,13 @@ description: Reset and manage the local SQLite database and data dir at dev time
 Deletes the DB and all filesystem data under `DATA_DIR` (maildir, WAL files, etc.). Use this whenever the DB is being replaced so that nothing on disk is left that depends on the old DB (e.g. maildir `.eml` paths referenced by `messages.raw_path`, or orphaned files).
 
 ```bash
-rm -rf data/
+rm -rf ~/.zmail/data/
 ```
 
 **DB only** (keeps maildir; use only when DB is bad but maildir is known good):
 
 ```bash
-rm -f data/zmail.db data/zmail.db-shm data/zmail.db-wal
+rm -f ~/.zmail/data/zmail.db ~/.zmail/data/zmail.db-shm ~/.zmail/data/zmail.db-wal
 ```
 
 After either, the next run that uses the DB (e.g. `bun run sync` or `zmail search`) will create a new DB and apply the current schema. First sync after a full reset is full; later syncs are incremental.

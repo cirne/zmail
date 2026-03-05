@@ -743,22 +743,25 @@ async function main() {
         console.log(`Sync:      never run`);
       }
 
-      // Indexing status
+      // Indexing status - show actual count from messages table, not just last run
+      const totalIndexed = db.query("SELECT COUNT(*) as count FROM messages WHERE embedding_state = 'done'").get() as { count: number };
+      const totalFailed = db.query("SELECT COUNT(*) as count FROM messages WHERE embedding_state = 'failed'").get() as { count: number };
+      
       if (indexStatus.is_running) {
         const elapsed = indexStatus.started_at
           ? Math.round((Date.now() - new Date(indexStatus.started_at).getTime()) / 1000)
           : 0;
         console.log(`Indexing:  running (${indexStatus.indexed_so_far}/${indexStatus.total_to_index} indexed, ${elapsed}s elapsed)`);
       } else if (indexStatus.completed_at) {
-        console.log(`Indexing:  idle (last: ${indexStatus.completed_at.slice(0, 10)}, ${indexStatus.indexed_so_far} indexed)`);
+        console.log(`Indexing:  idle (last: ${indexStatus.completed_at.slice(0, 10)}, ${totalIndexed.count} indexed${totalFailed.count > 0 ? `, ${totalFailed.count} failed` : ''})`);
       } else {
         console.log(`Indexing:  never run`);
       }
 
       // Search readiness
       const ftsCount = syncStatus.total_messages;
-      // For semantic count, we check what's been indexed
-      const semanticCount = indexStatus.indexed_so_far;
+      // For semantic count, we check what's been indexed (total, not just last run)
+      const semanticCount = totalIndexed.count;
       console.log(`Search:    FTS ready (${ftsCount}) | Semantic ready (${semanticCount})`);
       break;
     }

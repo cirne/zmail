@@ -1,4 +1,5 @@
 import { join } from "path";
+import { homedir } from "os";
 
 function required(key: string): string {
   const val = process.env[key];
@@ -8,6 +9,17 @@ function required(key: string): string {
 
 function optional(key: string, fallback: string): string {
   return process.env[key] ?? fallback;
+}
+
+/**
+ * Expands tilde (~) to home directory in paths.
+ * Handles ~/path format (e.g., ~/.zmail/data → /Users/username/.zmail/data).
+ */
+function expandTilde(path: string): string {
+  if (path.startsWith("~/")) {
+    return join(homedir(), path.slice(2));
+  }
+  return path;
 }
 
 export const config = {
@@ -35,7 +47,7 @@ export const config = {
   openai: {
     apiKey: required("OPENAI_API_KEY"),
   },
-  dataDir: optional("DATA_DIR", "./data"),
+  dataDir: expandTilde(optional("DATA_DIR", "~/.zmail/data")),
   port: Number(optional("PORT", "3000")),
 
   // Derived paths
@@ -51,7 +63,9 @@ export const config = {
   /** Path for embedding response cache. Empty if EMBEDDING_CACHE=0. */
   get embeddingCachePath(): string {
     if (process.env.EMBEDDING_CACHE === "0") return "";
-    return process.env.EMBEDDING_CACHE_PATH ?? join(this.dataDir, "embedding-cache");
+    const customPath = process.env.EMBEDDING_CACHE_PATH;
+    if (customPath) return expandTilde(customPath);
+    return join(this.dataDir, "embedding-cache");
   },
 } as const;
 

@@ -6,7 +6,7 @@ Modern email systems are human-first — designed around inbox browsing and manu
 
 ## What it does
 
-- Syncs email from IMAP (Gmail-first) into local storage (`data/maildir`, `data/zmail.db`, `data/vectors`)
+- Syncs email from IMAP (Gmail-first) into local storage (`~/.zmail/data/maildir`, `~/.zmail/data/zmail.db`, `~/.zmail/data/vectors`)
 - Indexes for FTS + semantic retrieval and exposes CLI + MCP interfaces
 - Supports agent-optimized shortlist → hydrate workflows via CLI search controls
 
@@ -72,7 +72,7 @@ zmail read "<message-id>" --raw
 zmail intentionally does not run automatic migrations on existing local DBs. If startup reports schema drift, rebuild local data and resync:
 
 ```bash
-rm -rf data/
+rm -rf ~/.zmail/data/
 bun run src/index.ts sync --since 7d
 ```
 
