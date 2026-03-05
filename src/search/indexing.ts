@@ -9,7 +9,6 @@
 import type { Database } from "bun:sqlite";
 import { getDb } from "~/db";
 import { logger } from "~/lib/logger";
-import { config } from "~/lib/config";
 import { acquireLock, releaseLock } from "~/lib/process-lock";
 import { embedBatch, prepareTextForEmbedding } from "./embeddings";
 import { addEmbeddingsBatch, ensureIndex, type EmbeddingRow } from "./vectors";
@@ -91,7 +90,7 @@ export function resetStaleClaims(db: Database): number {
 }
 
 /**
- * Process a single batch: embed via OpenAI, batch-insert to LanceDB, update SQLite.
+ * Process a single batch: embed via local model, batch-insert to LanceDB, update SQLite.
  */
 async function processBatch(
   db: Database,
@@ -147,20 +146,14 @@ export async function indexMessages(options?: {
   syncDone?: Promise<void>;
   /**
    * For testing: inject a DB instance instead of calling getDb().
-   * Also bypasses the OPENAI_API_KEY check when provided alongside _processBatch.
    */
   db?: Database;
   /**
-   * For testing: replace the real processBatch (which calls OpenAI + LanceDB)
-   * with a fake that returns immediately. When provided, skips the API key check.
+   * For testing: replace the real processBatch (which calls embeddings + LanceDB)
+   * with a fake that returns immediately.
    */
   _processBatch?: (db: Database, batch: MessageRow[]) => Promise<{ indexed: number; failed: number }>;
 }): Promise<IndexingResult> {
-  if (!config.openai.apiKey && !options?._processBatch) {
-    logger.warn("OPENAI_API_KEY not set, skipping indexing");
-    return { indexed: 0, skipped: 0, failed: 0, durationMs: 0, messagesPerMinute: 0 };
-  }
-
   const startTime = Date.now();
   const db = options?.db ?? getDb();
   const batchFn = options?._processBatch ?? processBatch;

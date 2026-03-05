@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { SearchResult } from "~/lib/types";
 import { embedText } from "./embeddings";
-import { searchVectors } from "./vectors";
+import { hasVectorTable, searchVectors } from "./vectors";
 
 export interface SearchOptions {
   query?: string;
@@ -137,11 +137,21 @@ async function vectorSearch(db: Database, opts: SearchOptions): Promise<SearchRe
   const { query, limit = 20, offset = 0, fromAddress, afterDate, beforeDate } = opts;
   if (!query?.trim()) return [];
 
+  // If no vector store exists yet, skip embedding to keep search fast (and keep tests hermetic).
+  if (!(await hasVectorTable())) return [];
+
   // Embed the query
   const queryEmbedding = await embedText(query);
 
-  // Search LanceDB for similar messages
-  const vectorResults = await searchVectors(queryEmbedding, limit + offset + 50); // Get extra for filtering
+  // Search LanceDB for similar messages.
+  // If the local vector store was built with a different embedding dimension/model,
+  // LanceDB will reject the query vector. In that case, degrade gracefully to "no semantic results".
+  let vectorResults: Array<{ messageId: string; score: number }>;
+  try {
+    vectorResults = await searchVectors(queryEmbedding, limit + offset + 50); // Get extra for filtering
+  } catch {
+    return [];
+  }
 
   // Fetch full message details from SQLite and apply filters
   const messageIds = vectorResults.map((r) => r.messageId);

@@ -1,56 +1,77 @@
-import OpenAI from "openai";
-import { config } from "~/lib/config";
+const MODEL_ID = "Xenova/bge-small-en-v1.5";
+const DTYPE = "q8";
+const QUERY_PREFIX =
+  "Represent this sentence for searching relevant passages: ";
 
-const MAX_CHARS = 8_000; // ~5.7K tokens at worst-case 1.4 chars/token (email w/ HTML remnants, URLs)
+const MAX_CHARS = 8_000; // crude char cap; model tokenizer will truncate further
 
 /**
- * Truncate text to stay within the embedding model's 8191-token limit.
- * Email body_text often contains HTML entities, URLs, and encoded content
- * that tokenize at ~1.6 chars/token — much worse than normal prose (~4 chars/token).
+ * Crude truncation to keep embedding input bounded.
+ * BGE models have much smaller context than OpenAI; tokenizer truncation still applies.
  */
 function truncateForEmbedding(text: string): string {
   if (text.length <= MAX_CHARS) return text;
   return text.slice(0, MAX_CHARS);
 }
 
-let openaiClient: OpenAI | null = null;
+let extractorPromise: Promise<any> | null = null;
 
-function getOpenAIClient(): OpenAI {
-  if (!openaiClient) {
-    if (!config.openai.apiKey) {
-      throw new Error("OPENAI_API_KEY is required for embeddings. Set it in .env");
-    }
-    openaiClient = new OpenAI({ apiKey: config.openai.apiKey });
+async function getExtractor(): Promise<any> {
+  if (!extractorPromise) {
+    const { pipeline } = await import("@huggingface/transformers");
+    extractorPromise = pipeline("feature-extraction", MODEL_ID, { dtype: DTYPE });
   }
-  return openaiClient;
+  return extractorPromise;
+}
+
+function tensorToVectors(out: any): number[][] {
+  const dims = (out?.dims ?? []) as number[];
+  const data = out?.data as Float32Array | undefined;
+  if (!data) throw new Error("Unexpected embedding output: missing data");
+
+  const dim = dims.length > 0 ? dims[dims.length - 1] : data.length;
+  const batch = dims.length > 1 ? dims[0] : 1;
+
+  if (batch * dim !== data.length) {
+    throw new Error(
+      `Unexpected embedding output shape: dims=${JSON.stringify(dims)} data_len=${data.length}`,
+    );
+  }
+
+  const vectors: number[][] = [];
+  for (let i = 0; i < batch; i++) {
+    const start = i * dim;
+    const end = start + dim;
+    vectors.push(Array.from(data.slice(start, end)));
+  }
+  return vectors;
+}
+
+async function embedInternal(texts: string[]): Promise<number[][]> {
+  if (texts.length === 0) return [];
+  const extractor = await getExtractor();
+  const out = await extractor(texts.map(truncateForEmbedding), {
+    pooling: "mean",
+    normalize: true,
+  });
+  return tensorToVectors(out);
 }
 
 /**
  * Generate an embedding for a single text string.
- * Uses OpenAI text-embedding-3-small (1536 dimensions, ~$0.02/M tokens).
+ * Uses local BGE small model (384 dimensions).
  */
 export async function embedText(text: string): Promise<number[]> {
-  const client = getOpenAIClient();
-  const response = await client.embeddings.create({
-    model: "text-embedding-3-small",
-    input: truncateForEmbedding(text),
-  });
-  return response.data[0].embedding;
+  const vectors = await embedInternal([`${QUERY_PREFIX}${text}`]);
+  return vectors[0];
 }
 
 /**
- * Generate embeddings for multiple texts in a single API call.
- * Each text is truncated independently to fit the per-input token limit.
- * Batching reduces HTTP round-trips and lets OpenAI parallelize on GPU.
+ * Generate embeddings for multiple texts.
+ * For index-time embeddings, passages are encoded without the query prefix.
  */
 export async function embedBatch(texts: string[]): Promise<number[][]> {
-  if (texts.length === 0) return [];
-  const client = getOpenAIClient();
-  const response = await client.embeddings.create({
-    model: "text-embedding-3-small",
-    input: texts.map(truncateForEmbedding),
-  });
-  return response.data.map((d) => d.embedding);
+  return embedInternal(texts);
 }
 
 /**

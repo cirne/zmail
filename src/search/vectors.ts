@@ -36,6 +36,12 @@ async function getTable(): Promise<Table | null> {
   return null;
 }
 
+export async function hasVectorTable(): Promise<boolean> {
+  const vectorDb = await getVectorDb();
+  const tables = await vectorDb.tableNames();
+  return tables.includes(TABLE_NAME);
+}
+
 /**
  * Append a batch of embeddings. Append-only — no per-row delete.
  * SQLite embedding_state is the authority on what's indexed; duplicates

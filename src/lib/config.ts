@@ -33,7 +33,7 @@ export const config = {
     secret: optional("AUTH_SECRET", "dev-secret-change-me"),
   },
   openai: {
-    apiKey: required("OPENAI_API_KEY"),
+    apiKey: optional("OPENAI_API_KEY", ""),
   },
   dataDir: optional("DATA_DIR", "./data"),
   port: Number(optional("PORT", "3000")),
