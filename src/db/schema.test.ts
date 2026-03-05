@@ -25,6 +25,7 @@ describe("database schema", () => {
       expect(names).toContain("sync_state");
       expect(names).toContain("sync_windows");
       expect(names).toContain("sync_summary");
+      expect(names).toContain("indexing_status");
     });
 
     it("creates messages_fts virtual table", () => {
@@ -42,6 +43,29 @@ describe("database schema", () => {
         .get() as { id: number; total_messages: number } | null;
       expect(row).not.toBeNull();
       expect(row!.total_messages).toBe(0);
+    });
+
+    it("pre-seeds the indexing_status singleton row", () => {
+      const row = db
+        .query("SELECT * FROM indexing_status WHERE id = 1")
+        .get() as { id: number; is_running: number; indexed_so_far: number } | null;
+      expect(row).not.toBeNull();
+      expect(row!.is_running).toBe(0);
+      expect(row!.indexed_so_far).toBe(0);
+    });
+
+    it("indexing_status has expected columns", () => {
+      const cols = db
+        .query("PRAGMA table_info(indexing_status)")
+        .all() as { name: string }[];
+      const names = cols.map((c) => c.name);
+      expect(names).toContain("is_running");
+      expect(names).toContain("total_to_index");
+      expect(names).toContain("indexed_so_far");
+      expect(names).toContain("failed");
+      expect(names).toContain("started_at");
+      expect(names).toContain("last_updated_at");
+      expect(names).toContain("completed_at");
     });
   });
 

@@ -11,12 +11,16 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@lancedb/lancedb": "latest",
     "@modelcontextprotocol/sdk": "latest",
     "hono": "latest",
-    "imapflow": "latest"
+    "imapflow": "latest",
+    "mailparser": "^3.9.3",
+    "openai": "latest"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/mailparser": "^3.4.6",
     "typescript": "latest"
   }
 }

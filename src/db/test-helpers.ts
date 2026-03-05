@@ -8,6 +8,7 @@ export function createTestDb(): Database {
   db.run("PRAGMA foreign_keys = ON");
   db.run(SCHEMA);
   db.run("INSERT OR IGNORE INTO sync_summary (id, total_messages) VALUES (1, 0)");
+  db.run("INSERT OR IGNORE INTO indexing_status (id) VALUES (1)");
   return db;
 }
 

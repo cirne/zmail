@@ -17,22 +17,51 @@ agentmail thread th_8473
 agentmail attachments read att_291   # returns PDF content as markdown
 ```
 
+## Quick start (local hello world)
+
+**What’s in place today:** Config (env), SQLite DB + schema + FTS5, CLI (`sync` / `search` / `thread` / `message` / `mcp`), web UI (Hono), MCP server (stdio when you run `agentmail mcp`), and sync/provider scaffolding. **IMAP sync is not yet implemented** — `bun run sync` only logs; no mail is fetched until the sync engine is built.
+
+1. **Install and env**
+   ```bash
+   bun install
+   cp .env.example .env
+   ```
+
+2. **Gmail app password**  
+   Use a [Gmail app password](https://support.google.com/accounts/answer/185833) (not an OAuth API key). In `.env`:
+   ```bash
+   IMAP_USER=your@gmail.com
+   IMAP_PASSWORD=xxxx-xxxx-xxxx-xxxx   # 16-char app password
+   ```
+   Leave `IMAP_HOST=imap.gmail.com` and `IMAP_PORT=993` as in `.env.example`.
+
+3. **Sync only the last day (when sync exists)**  
+   Set the sync window start to yesterday so only recent mail is fetched:
+   ```bash
+   SYNC_FROM_DATE=2025-03-03   # use yesterday’s date
+   ```
+   Default is 1 year back; see [`.env.example`](.env.example).
+
+4. **Run**
+   ```bash
+   bun run dev      # web UI at http://localhost:3000 + background sync (stub)
+   # or
+   bun run sync     # run sync only (stub)
+   ```
+   CLI (against empty DB until sync is implemented):
+   ```bash
+   bun run src/cli/index.ts search "hello"
+   bun run src/cli/index.ts thread some-id
+   ```
+   Or build and run the binary: `bun run build` then `./dist/agentmail search "hello"`.
+
 ## Architecture
 
-Built with TypeScript + Bun. All data stored locally on a persistent volume — no cloud sync service, no third-party access to your email.
-
-```
-/data
-├── maildir/        raw .eml files (source of truth)
-├── agentmail.db    SQLite: metadata, full-text search, sync state
-└── vectors/        LanceDB: semantic embeddings
-```
-
-See [`docs/VISION.md`](docs/VISION.md) for the product vision and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for technical decisions.
+Built with TypeScript + Bun. All data stored locally on a persistent volume — no cloud sync service, no third-party access to your email. Storage layout and technical decisions: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Product vision: [`docs/VISION.md`](docs/VISION.md).
 
 ## Status
 
-Early development. Not yet ready for general use.
+Early development. IMAP sync is stubbed; DB, CLI, web, and MCP are in place. Not yet ready for general use.
 
 ## License
 

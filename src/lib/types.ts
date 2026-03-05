@@ -13,7 +13,6 @@ export interface Message {
   subject: string;
   date: string; // ISO 8601
   bodyText: string;
-  bodyHtml: string | null;
   rawPath: string; // path to .eml file in maildir
   syncedAt: string;
 }

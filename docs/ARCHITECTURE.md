@@ -304,6 +304,115 @@ Single Bun process
 
 ---
 
+### ADR-016: Sync Performance — Bandwidth-Bound as Goal
+
+**Decision:** Sync speed is of paramount importance. The target is to saturate I/O: the sync pipeline should be limited by available network bandwidth (or disk throughput when writing), not by CPU, concurrency limits, or unnecessary serialization. If IMAP sync is not bound by available bandwidth, it has room for improvement.
+
+**Rationale:** Users with large mailboxes need backfill and incremental sync to finish as fast as the provider and link allow. Being bandwidth-bound means we have eliminated avoidable bottlenecks (e.g. single-connection fetch, one-at-a-time parsing, blocking on index writes). This principle guides choices around parallel fetch, connection reuse, pipelining, and batching so that the only remaining limit is physics — how much data the network and disk can move.
+
+**Result:** When optimizing sync, the question to ask is: are we maxing out the pipe? If not, the design or implementation should be improved until we are.
+
+---
+
+### ADR-017: Sync Design — Priority, Batching, and Backoff
+
+**Decision:** Sync is timestamp- and folder-priority focused, avoids chatty-protocol slowdowns, and uses smart backoff when the provider complains.
+
+**Priority**
+- **Most recent first:** Newest messages and most important folders (e.g. INBOX, [Gmail]/All Mail) get highest priority so recent mail is searchable quickly. This aligns with ADR-013’s windowed strategy but applies continuously: within and across folders, prefer recent-by-date and high-value folders.
+- **Goal:** Users see today’s mail and key folders synced before deep archive backfill.
+
+**Avoid chatty protocols (or parallelize if we must)**
+- IMAP can be slow when used in a chatty way (many small round-trips, one message per request). Learn from download managers (e.g. Steam, browser downloaders): batch fetches, multiple parallel streams, and large reads so the pipeline is limited by bandwidth, not RTT or command count.
+- **Apply to email sync:** Prefer batching (e.g. ranges of UIDs or chunked FETCH), concurrent connections where the provider allows, and pipelining to minimize round-trips per byte. The aim is to saturate the network, not to tickle it with small requests.
+- **When the protocol stays chatty:** If we cannot avoid chatty usage (e.g. provider or protocol limits on batch size), run many workers in parallel. Many concurrent connections or workers each doing small requests can still saturate the link; latency is amortized across parallelism. Prefer batching first, then scale out with workers.
+- **Rationale:** Chatty protocols leave bandwidth on the table when run single-threaded; batching reduces chattyness, and parallelism is the fallback to become bandwidth-bound (ADR-016) when batching alone is insufficient.
+
+**Smart, fast backoff**
+- When the IMAP provider signals backpressure (e.g. rate limit, “try again”, connection throttling, errors), back off so we don’t hammer the server — but resume aggressively when the provider is happy again.
+- **Smart:** Back off in proportion to the signal (e.g. respect Retry-After or error type; avoid overly long sleeps when a short pause suffices).
+- **Fast:** Once the provider allows, ramp back to full throughput quickly. Avoid conservative backoff that keeps sync slow long after the provider has recovered.
+- **Rationale:** We want to be good citizens and avoid bans, while still achieving saturation whenever the provider and network allow.
+
+**Result:** Sync design should explicitly address: (1) ordering work by timestamp and folder importance, (2) batching and parallelism to avoid chatty IMAP and saturate the link, and (3) backoff that is both respectful and fast to recover.
+
+---
+
+### ADR-018: Sync Observability — Synchronous Run + Observable Progress
+
+**Decision:** Sync runs **synchronously**. Progress is observable in two ways so agents (or humans) can infer status and speed without introducing a job queue:
+
+1. **Periodic progress to stdout** — During sync, emit progress lines at a regular cadence (e.g. every N messages or every few seconds): messages fetched so far, bytes downloaded, elapsed time, throughput (msg/min). When the run finishes, always emit a final metrics block (messages new/fetched, bytes, bandwidth, msg/min, duration).
+2. **Pollable progress** — Write current-run progress to a well-known place (e.g. a progress file under DATA_DIR or fields in sync_summary / a small table) so another agent or process can poll (e.g. `agentmail status` or reading a file) and report status even when the runner does not stream stdout.
+
+We do **not** introduce async job IDs or a job queue for sync unless we later need multiple concurrent syncs or very long-running jobs that must outlive a single CLI invocation.
+
+**Rationale:** Agent-first (VISION) means the primary consumers of the CLI are agents (Claude Code, OpenClaw, Pi, etc.). They invoke `agentmail sync` as a subprocess. Some environments stream stdout, so periodic progress lines give live feedback; others only return output on exit, so the final metrics block is still available. A pollable source (file or DB + `agentmail status`) lets a *different* agent or process observe “sync in progress” without depending on streaming. Keeping sync synchronous avoids job storage, lifecycle, and daemon complexity for the common case (single-user, single sync at a time).
+
+**Result:** Sync is fast, accurate, and reports how fast it was (ADR-016/017). It also makes progress observable so other agents can inspect and report status as it goes.
+
+---
+
+### ADR-019: Data Duplication — What Lives in SQLite vs. Raw Store
+
+**Decision:** The `messages` table stores `body_text` but **not** `body_html`. HTML content is read on demand from the raw `.eml` file via `raw_path`.
+
+**Data residency by layer:**
+
+| Data | Canonical store | Also in SQLite? | Why |
+|---|---|---|---|
+| Raw email (MIME) | `.eml` file in `maildir/` | No | Canonical artifact — everything rebuilds from this |
+| `body_text` | `.eml` file | **Yes** — `messages.body_text` | Required for FTS5. The external-content FTS5 table (`content='messages'`) reads from this column for indexing and `snippet()` generation. Removing it would break full-text search. |
+| `body_html` | `.eml` file | **No** | Not indexed, not searched. Parse from `.eml` on demand when rendering is needed. |
+| Embeddings | LanceDB (`data/vectors/`) | No | Vector-only (no text stored in LanceDB). Rebuildable from `body_text`. |
+| Metadata (from, to, subject, date, labels) | `.eml` headers | **Yes** — `messages.*` columns | Needed for filtering, sorting, and display without parsing `.eml` on every query. |
+
+**Rationale:** The guiding principle is: the raw `.eml` store is the durable artifact; SQLite is a rebuildable index (ADR-002). Data should only be duplicated into SQLite when it is required for indexing or high-frequency queries. `body_text` qualifies because FTS5 cannot function without it. `body_html` does not — it's never searched and can be parsed from the `.eml` on the rare occasions it's needed. Metadata columns (from, to, subject, date) qualify because they're used in WHERE/ORDER BY/JOIN on nearly every query.
+
+**Consistency:** Email is immutable after receipt. Both the `.eml` file and the SQLite row are written in the same sync operation. There is no update path where they could drift. If the SQLite index is ever suspect, it can be rebuilt from the `.eml` store without touching IMAP.
+
+---
+
+### ADR-020: Sync and Indexing — Two Concurrent Workers, One Command
+
+**Decision:** `agentmail sync` is the single user-facing command. Under the hood, it orchestrates two concurrent workers in the same process:
+
+1. **Sync worker** (bandwidth-bound): IMAP fetch → write `.eml` to maildir → insert into SQLite. Optimized to saturate network bandwidth (ADR-016/017).
+2. **Index worker** (API-rate-bound): Read un-indexed messages from SQLite → generate embeddings via OpenAI → write to LanceDB. Runs with maximum parallelism the API key allows.
+
+```
+agentmail sync
+├── Sync worker:  IMAP → maildir + SQLite  (bandwidth-bound)
+└── Index worker: SQLite → OpenAI → LanceDB  (API-rate-bound)
+```
+
+**Progressive availability:** Synced messages are immediately available for FTS5/keyword search and direct fetch. Semantic search becomes available progressively as the indexer catches up — like a database serving queries while building an index in the background.
+
+**Concurrency model:**
+- Sync and indexing run **concurrently with each other** (different write targets: SQLite vs. LanceDB — no contention).
+- Neither runs **concurrently with itself** (advisory lock via DB flag per worker).
+- Both workers share the same process. No IPC, no daemon, no job queue.
+- `agentmail sync` waits for both workers to complete before exiting.
+- If `OPENAI_API_KEY` is not set, sync runs alone (FTS-only mode, no indexing).
+
+**Advisory lock pattern:**
+- Each worker has an `is_running` flag in its status table (`sync_summary`, `indexing_status`).
+- Before starting, check the flag. If set and `last_updated_at` is recent (< 5 min), exit early.
+- If `last_updated_at` is stale, assume the previous run crashed and take over the lock.
+- On completion or error, clear the flag.
+
+**Observability:**
+- Both workers track progress in the DB (`sync_summary`, `indexing_status`).
+- `agentmail status` reads both tables and reports current state.
+- Agents and remote clients can poll status at any time without depending on stdout.
+- Stdout progress lines are emitted periodically for environments that stream output.
+
+**No standalone indexing command.** There is no `agentmail index` or backfill tool. `agentmail sync` is the only entry point for data ingestion and indexing — one command, one process.
+
+**Rationale:** Embedding via an external API (OpenAI) adds ~50–100ms latency per message. Running this inline during sync would make sync API-bound instead of bandwidth-bound, violating ADR-016. Separating the two workers lets each optimize for its own bottleneck while presenting a single command to the user.
+
+---
+
 ## Open Questions
 
 _(none — all major decisions resolved)_

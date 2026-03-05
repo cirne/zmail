@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { getDb } from "~/db";
-import { search } from "~/search";
+import { search, semanticSearch, hybridSearch } from "~/search";
 import { logger } from "~/lib/logger";
 
 export function createMcpServer() {
@@ -14,10 +14,28 @@ export function createMcpServer() {
   server.tool(
     "search_mail",
     "Search emails by full-text query. Returns matching messages with snippets.",
-    { query: z.string(), limit: z.number().optional() },
-    async ({ query, limit }) => {
+    {
+      query: z.string(),
+      limit: z.number().optional(),
+      offset: z.number().optional(),
+      fromAddress: z.string().optional(),
+      afterDate: z.string().optional(),
+      beforeDate: z.string().optional(),
+      mode: z.enum(["fts", "semantic", "hybrid"]).optional().default("fts"),
+    },
+    async ({ query, limit, offset, fromAddress, afterDate, beforeDate, mode }) => {
       const db = getDb();
-      const results = search(db, { query, limit });
+      const opts = { query, limit, offset, fromAddress, afterDate, beforeDate };
+
+      let results;
+      if (mode === "semantic") {
+        results = await semanticSearch(db, opts);
+      } else if (mode === "hybrid") {
+        results = await hybridSearch(db, opts);
+      } else {
+        results = search(db, opts);
+      }
+
       return {
         content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
       };

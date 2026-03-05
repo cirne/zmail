@@ -23,6 +23,10 @@ export const config = {
   },
   sync: {
     fromDate: optional("SYNC_FROM_DATE", oneYearAgo),
+    /** Override mailbox to sync (e.g. "[Gmail]/All Mail" or "INBOX"). If unset, Gmail → All Mail, else INBOX. */
+    mailbox: optional("SYNC_MAILBOX", ""),
+    /** Comma-separated labels to exclude (e.g. Trash,Spam). Case-insensitive. Default: Trash,Spam. */
+    excludeLabels: (optional("SYNC_EXCLUDE_LABELS", "Trash,Spam").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)) as string[],
   },
   google: {
     clientId: optional("GOOGLE_CLIENT_ID", ""),

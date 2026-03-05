@@ -19,9 +19,12 @@ export function getDb(): Database {
 
   _db.run(SCHEMA);
 
-  // Ensure sync_summary singleton row exists
+  // Ensure singleton status rows exist
   _db.run(
     "INSERT OR IGNORE INTO sync_summary (id, total_messages) VALUES (1, 0)"
+  );
+  _db.run(
+    "INSERT OR IGNORE INTO indexing_status (id) VALUES (1)"
   );
 
   logger.debug("Database opened", { path: config.dbPath });

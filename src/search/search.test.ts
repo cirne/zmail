@@ -88,4 +88,84 @@ describe("search", () => {
     // These are common user inputs that could break naive FTS queries
     expect(() => search(db, { query: "hello world" })).not.toThrow();
   });
+
+  it("filters by fromAddress", () => {
+    insertTestMessage(db, {
+      subject: "Message from Alice",
+      fromAddress: "alice@example.com",
+      bodyText: "Hello",
+    });
+    insertTestMessage(db, {
+      subject: "Message from Bob",
+      fromAddress: "bob@example.com",
+      bodyText: "Hello",
+    });
+
+    const results = search(db, { query: "Hello", fromAddress: "alice@example.com" });
+    expect(results.length).toBe(1);
+    expect(results[0].fromAddress).toBe("alice@example.com");
+  });
+
+  it("filters by afterDate", () => {
+    insertTestMessage(db, {
+      subject: "Old message",
+      date: "2024-01-01T00:00:00Z",
+      bodyText: "test",
+    });
+    insertTestMessage(db, {
+      subject: "Recent message",
+      date: "2024-12-01T00:00:00Z",
+      bodyText: "test",
+    });
+
+    const results = search(db, { query: "test", afterDate: "2024-06-01" });
+    expect(results.length).toBe(1);
+    expect(results[0].subject).toBe("Recent message");
+  });
+
+  it("filters by beforeDate", () => {
+    insertTestMessage(db, {
+      subject: "Old message",
+      date: "2024-01-01T00:00:00Z",
+      bodyText: "test",
+    });
+    insertTestMessage(db, {
+      subject: "Recent message",
+      date: "2024-12-01T00:00:00Z",
+      bodyText: "test",
+    });
+
+    const results = search(db, { query: "test", beforeDate: "2024-06-01" });
+    expect(results.length).toBe(1);
+    expect(results[0].subject).toBe("Old message");
+  });
+
+  it("combines multiple filters", () => {
+    insertTestMessage(db, {
+      subject: "Match 1",
+      fromAddress: "alice@example.com",
+      date: "2024-06-15T00:00:00Z",
+      bodyText: "contract discussion",
+    });
+    insertTestMessage(db, {
+      subject: "Match 2",
+      fromAddress: "alice@example.com",
+      date: "2024-01-15T00:00:00Z",
+      bodyText: "contract discussion",
+    });
+    insertTestMessage(db, {
+      subject: "No match",
+      fromAddress: "bob@example.com",
+      date: "2024-06-15T00:00:00Z",
+      bodyText: "contract discussion",
+    });
+
+    const results = search(db, {
+      query: "contract",
+      fromAddress: "alice@example.com",
+      afterDate: "2024-06-01",
+    });
+    expect(results.length).toBe(1);
+    expect(results[0].subject).toBe("Match 1");
+  });
 });

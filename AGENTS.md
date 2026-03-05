@@ -2,6 +2,10 @@
 
 This file provides context for AI coding agents (Claude Code, Cursor, OpenClaw, etc.) working in this repository.
 
+## Single source of truth
+
+**There is exactly one canonical source for each kind of information.** Do not duplicate facts in multiple files; point to the canonical doc instead. When updating documentation, update the single source and fix or remove any copies. Canonical sources: `docs/ARCHITECTURE.md` (technical decisions and storage layout), `docs/VISION.md` (product vision), `.env.example` (environment variables), this file (project structure and agent conventions).
+
 ## What this project is
 
 **agentmail** is an agent-first email system. It syncs email from IMAP providers, indexes it locally, and exposes it as a queryable dataset via a CLI binary and MCP server.
@@ -27,7 +31,7 @@ The goal is not another email client. The goal is to make email a tool-accessibl
 | Web UI | Hono + HTMX |
 | Distribution | `bun build --compile` → native binary |
 
-## Project structure (once scaffolded)
+## Project structure
 
 ```
 src/
@@ -50,6 +54,7 @@ docs/
 - Prefer `bun:sqlite` over any external SQLite library — it's built in and faster.
 - All storage access for raw files goes through a `StorageAdapter` interface (`LocalAdapter` default, `S3Adapter` optional).
 - Never commit email data, credentials, or `.db` files — see `.gitignore`.
+- **Local DB at dev time:** No migrations; schema is applied on DB creation. To apply schema changes or reset state, delete `data/` or `data/agentmail.db` and re-run. See [`.cursor/skills/db-dev/`](.cursor/skills/db-dev/) for the standard skill.
 - The CLI (`agentmail <command>`) and MCP server share the same underlying logic. Commands return structured JSON suitable for agent consumption.
 - Attachment extraction uses per-format libraries (`pdfjs-dist`, `mammoth`, `xlsx`) behind a `DocumentExtractor` interface.
 
@@ -62,16 +67,15 @@ bun run sync         # run sync daemon
 bun run build        # compile native binary
 ```
 
+## Running sync
+
+Canonical sync behavior: [`.env.example`](.env.example) (SYNC_MAILBOX, SYNC_EXCLUDE_LABELS), [db-dev](.cursor/skills/db-dev/) (reset before sync if schema changed).
+
+- **Env:** `IMAP_USER` and `IMAP_PASSWORD` required. Optional: `SYNC_MAILBOX`, `SYNC_EXCLUDE_LABELS`, `SYNC_FROM_DATE`.
+- **Default:** Gmail → mailbox `[Gmail]/All Mail`; exclude labels Trash and Spam. Override in `.env`.
+- **CLI:** `bun run src/index.ts sync` or `sync --since 7d` (5w, 3m, 2y). Metrics (messages, bytes, bandwidth, msg/min) printed at end.
+- **After full reset (db-dev):** First sync is full; later syncs incremental. No migrations — if schema changed, reset then sync.
+
 ## Environment variables
 
-```
-IMAP_HOST=imap.gmail.com
-IMAP_PORT=993
-IMAP_USER=you@gmail.com
-IMAP_PASSWORD=app-password-here
-SYNC_FROM_DATE=2024-01-01     # default: 1 year ago
-GOOGLE_CLIENT_ID=...
-GOOGLE_CLIENT_SECRET=...
-AUTH_SECRET=...               # signs session cookies
-DATA_DIR=/data                # root for maildir, db, vectors
-```
+Canonical list and descriptions: [`.env.example`](.env.example). Summary: `IMAP_*`, `SYNC_FROM_DATE`, `SYNC_MAILBOX`, `SYNC_EXCLUDE_LABELS`, `GOOGLE_*`, `AUTH_SECRET`, `PORT`, `DATA_DIR`, optional `OPENAI_API_KEY`.

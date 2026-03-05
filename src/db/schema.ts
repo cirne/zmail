@@ -7,6 +7,7 @@ export const SCHEMA = /* sql */ `
     thread_id    TEXT NOT NULL,
     folder       TEXT NOT NULL,
     uid          INTEGER NOT NULL,
+    labels       TEXT NOT NULL DEFAULT '[]',
     from_address TEXT NOT NULL,
     from_name    TEXT,
     to_addresses TEXT NOT NULL DEFAULT '[]',
@@ -14,10 +15,11 @@ export const SCHEMA = /* sql */ `
     subject      TEXT NOT NULL DEFAULT '',
     date         TEXT NOT NULL,
     body_text    TEXT NOT NULL DEFAULT '',
-    body_html    TEXT,
     raw_path     TEXT NOT NULL,
     synced_at    TEXT NOT NULL DEFAULT (datetime('now'))
   );
+  -- labels: JSON array of label/tag names (Gmail: X-GM-LABELS; generic: optional).
+  -- Enables "inbox only", "starred", "archive" filters without re-syncing.
 
   CREATE TABLE IF NOT EXISTS threads (
     thread_id          TEXT PRIMARY KEY,
@@ -68,6 +70,17 @@ export const SCHEMA = /* sql */ `
     total_messages       INTEGER NOT NULL DEFAULT 0,
     last_sync_at         TEXT,
     is_running           INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS indexing_status (
+    id                INTEGER PRIMARY KEY CHECK (id = 1),
+    is_running        INTEGER NOT NULL DEFAULT 0,
+    total_to_index    INTEGER NOT NULL DEFAULT 0,
+    indexed_so_far    INTEGER NOT NULL DEFAULT 0,
+    failed            INTEGER NOT NULL DEFAULT 0,
+    started_at        TEXT,
+    last_updated_at   TEXT,
+    completed_at      TEXT
   );
 
   -- FTS5 full-text search index over message subjects and bodies
