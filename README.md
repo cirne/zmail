@@ -33,37 +33,38 @@ Modern email systems are human-first — designed around inbox browsing and manu
 
 4. **Search (header-first default)**
    ```bash
-   bun run src/index.ts search "apple receipt" --after 30d --json
+   bun run src/index.ts search "apple receipt after:30d" --json
    ```
 
 ## CLI
 
 ```bash
 zmail sync [--since <spec>]
-zmail search <query> [--from <address>] [--after <date>] [--before <date>]
-                  [--mode auto|fts|semantic|hybrid]
+zmail search <query> [--mode auto|fts|semantic|hybrid]
                   [--detail headers|snippet|body]
                   [--fields <csv>] [--ids-only] [--timings]
                   [--limit <n>] [--json]
 zmail status
 zmail stats
-zmail thread <id>
-zmail message <id> [--raw]
+zmail read <id> [--raw]         # or zmail message <id>
+zmail thread <id> [--raw]
 zmail mcp
 ```
+
+Query can use inline operators: `from:`, `to:`, `subject:`, `after:`, `before:` (e.g. `zmail search "from:alice@example.com invoice OR receipt"`).
 
 ### Recommended agent retrieval pattern
 
 ```bash
 # 1) Fast shortlist
-zmail search "receipt" --from no_reply@email.apple.com --after 30d \
+zmail search "from:no_reply@email.apple.com receipt after:30d" \
   --detail headers --fields messageId,date,subject --ids-only --json
 
 # 2) Hydrate selected IDs
-zmail message "<message-id>"
+zmail read "<message-id>"
 
 # Optional: fetch original raw MIME source
-zmail message "<message-id>" --raw
+zmail read "<message-id>" --raw
 ```
 
 ### Schema drift recovery

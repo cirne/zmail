@@ -42,9 +42,12 @@ bun install
 bun run dev          # web UI + MCP server (port 3000), starts background sync
 bun run sync         # sync only (or: bun run src/index.ts sync --since 7d)
 bun run build        # compile native binary
+bun run install-cli  # build + copy binary to ~/.local/bin (or ZMAIL_INSTALL_DIR) for testing from another dir
 bun run lint         # tsc --noEmit (no ESLint)
 bun test             # run test suite
 ```
+
+**CLI help and onboarding (no env required):** `zmail --help`, `zmail -h`, `zmail help` show usage; `zmail setup` shows full setup instructions. If any command fails due to missing required env, the CLI prints the error and the full setup instructions (see `src/lib/onboarding.ts`).
 
 ## Environment variables
 First, check whether these required variables are already present in the current environment:

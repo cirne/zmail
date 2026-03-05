@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 const MODEL_ID = "text-embedding-3-small";
 
@@ -24,7 +24,7 @@ export async function getCachedEmbedding(
   input: string
 ): Promise<number[] | null> {
   if (!cacheDir) return null;
-  const path = cacheFilePath(cacheDir, modelId, input);
+  const path = cacheFilePath(resolve(cacheDir), modelId, input);
   try {
     const raw = await readFile(path, "utf8");
     const arr = JSON.parse(raw) as number[];
@@ -45,11 +45,13 @@ export async function setCachedEmbedding(
   embedding: number[]
 ): Promise<void> {
   if (!cacheDir) return;
-  const dir = join(cacheDir, modelId);
+  const root = resolve(cacheDir);
+  const dir = join(root, modelId);
   await mkdir(dir, { recursive: true });
-  const path = cacheFilePath(cacheDir, modelId, input);
+  const path = join(dir, `${hashInput(input)}.json`);
   const tmp = join(dir, `.tmp.${hashInput(input)}.${Date.now()}.json`);
   await writeFile(tmp, JSON.stringify(embedding), "utf8");
+  await mkdir(dir, { recursive: true });
   await rename(tmp, path);
 }
 

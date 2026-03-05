@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { SearchResult } from "~/lib/types";
 import { embedText } from "./embeddings";
 import { searchVectors } from "./vectors";
+import { parseSearchQuery } from "./query-parse";
 
 export type SearchMode = "auto" | "fts" | "semantic" | "hybrid";
 export type ResolvedSearchMode = "filter" | "fts" | "semantic" | "hybrid";
@@ -11,9 +12,13 @@ export interface SearchOptions {
   limit?: number;
   offset?: number;
   fromAddress?: string;
+  toAddress?: string;
+  subject?: string;
   afterDate?: string;
   beforeDate?: string;
   mode?: SearchMode;
+  /** When true, use OR logic between filters instead of AND. */
+  filterOr?: boolean;
 }
 
 export interface SearchTimings {
@@ -39,26 +44,41 @@ function fromFilterPattern(value: string): string {
  * Filter-only search (no query text, just WHERE clauses).
  */
 function filterOnlySearch(db: Database, opts: SearchOptions): SearchResult[] {
-  const { limit = 20, offset = 0, fromAddress, afterDate, beforeDate } = opts;
+  const { limit = 20, offset = 0, fromAddress, toAddress, subject, afterDate, beforeDate, filterOr } = opts;
   const conditions: string[] = [];
   const params: (string | number)[] = [];
 
   if (fromAddress) {
     const pattern = fromFilterPattern(fromAddress);
-    conditions.push("(m.from_address LIKE ? OR m.from_name LIKE ?)");
+    const cond = "(m.from_address LIKE ? OR m.from_name LIKE ?)";
+    conditions.push(filterOr ? `(${cond})` : cond);
     params.push(pattern, pattern);
   }
+  if (toAddress) {
+    const pattern = fromFilterPattern(toAddress);
+    const cond = "(EXISTS (SELECT 1 FROM json_each(m.to_addresses) j WHERE j.value LIKE ?) OR EXISTS (SELECT 1 FROM json_each(m.cc_addresses) j WHERE j.value LIKE ?))";
+    conditions.push(filterOr ? `(${cond})` : cond);
+    params.push(pattern, pattern);
+  }
+  if (subject) {
+    const pattern = fromFilterPattern(subject);
+    const cond = "m.subject LIKE ?";
+    conditions.push(filterOr ? `(${cond})` : cond);
+    params.push(pattern);
+  }
   if (afterDate) {
-    conditions.push("m.date >= ?");
+    const cond = "m.date >= ?";
+    conditions.push(filterOr ? `(${cond})` : cond);
     params.push(afterDate);
   }
   if (beforeDate) {
-    conditions.push("m.date <= ?");
+    const cond = "m.date <= ?";
+    conditions.push(filterOr ? `(${cond})` : cond);
     params.push(beforeDate);
   }
 
   params.push(limit, offset);
-  const where = `WHERE ${conditions.join(" AND ")}`;
+  const where = `WHERE ${conditions.join(filterOr ? " OR " : " AND ")}`;
   const rows = db
     .query(
       /* sql */ `
@@ -85,7 +105,7 @@ function filterOnlySearch(db: Database, opts: SearchOptions): SearchResult[] {
  * FTS5 search (keyword matching via BM25).
  */
 function ftsSearch(db: Database, opts: SearchOptions): SearchResult[] {
-  const { query, limit = 20, offset = 0, fromAddress, afterDate, beforeDate } = opts;
+  const { query, limit = 20, offset = 0, fromAddress, toAddress, subject, afterDate, beforeDate } = opts;
   if (!query?.trim()) return [];
 
   const conditions: string[] = ["messages_fts MATCH ?"];
@@ -95,6 +115,16 @@ function ftsSearch(db: Database, opts: SearchOptions): SearchResult[] {
     const pattern = fromFilterPattern(fromAddress);
     conditions.push("(m.from_address LIKE ? OR m.from_name LIKE ?)");
     params.push(pattern, pattern);
+  }
+  if (toAddress) {
+    const pattern = fromFilterPattern(toAddress);
+    conditions.push("(EXISTS (SELECT 1 FROM json_each(m.to_addresses) j WHERE j.value LIKE ?) OR EXISTS (SELECT 1 FROM json_each(m.cc_addresses) j WHERE j.value LIKE ?))");
+    params.push(pattern, pattern);
+  }
+  if (subject) {
+    const pattern = fromFilterPattern(subject);
+    conditions.push("m.subject LIKE ?");
+    params.push(pattern);
   }
   if (afterDate) {
     conditions.push("m.date >= ?");
@@ -128,9 +158,9 @@ function ftsSearch(db: Database, opts: SearchOptions): SearchResult[] {
     )
     .all(...params) as SearchResult[];
 
-  // Apply filters and limit/offset
+  // Apply filters and limit/offset (post-query filtering for toAddress/subject if needed)
   let filtered = rows;
-  if (fromAddress || afterDate || beforeDate) {
+  if (fromAddress || toAddress || subject || afterDate || beforeDate) {
     filtered = rows.filter((r) => {
       if (fromAddress) {
         const pattern = fromAddress.toLowerCase();
@@ -139,6 +169,7 @@ function ftsSearch(db: Database, opts: SearchOptions): SearchResult[] {
           (r.fromName && r.fromName.toLowerCase().includes(pattern));
         if (!fromMatch) return false;
       }
+      // Note: toAddress and subject are already filtered in SQL, but we keep this for consistency
       if (afterDate && r.date < afterDate) return false;
       if (beforeDate && r.date > beforeDate) return false;
       return true;
@@ -156,7 +187,7 @@ async function vectorSearchFromEmbedding(
   opts: SearchOptions,
   queryEmbedding: number[]
 ): Promise<SearchResult[]> {
-  const { query, limit = 20, offset = 0, fromAddress, afterDate, beforeDate } = opts;
+  const { query, limit = 20, offset = 0, fromAddress, toAddress, subject, afterDate, beforeDate } = opts;
   if (!query?.trim()) return [];
 
   // Search LanceDB for similar messages
@@ -174,6 +205,16 @@ async function vectorSearchFromEmbedding(
     const pattern = fromFilterPattern(fromAddress);
     conditions.push("(m.from_address LIKE ? OR m.from_name LIKE ?)");
     params.push(pattern, pattern);
+  }
+  if (toAddress) {
+    const pattern = fromFilterPattern(toAddress);
+    conditions.push("(EXISTS (SELECT 1 FROM json_each(m.to_addresses) j WHERE j.value LIKE ?) OR EXISTS (SELECT 1 FROM json_each(m.cc_addresses) j WHERE j.value LIKE ?))");
+    params.push(pattern, pattern);
+  }
+  if (subject) {
+    const pattern = fromFilterPattern(subject);
+    conditions.push("m.subject LIKE ?");
+    params.push(pattern);
   }
   if (afterDate) {
     conditions.push("m.date >= ?");
@@ -339,44 +380,69 @@ export async function searchWithMeta(
   opts: SearchOptions
 ): Promise<SearchResultSet> {
   const startedAt = Date.now();
-  const { query, limit = 20, offset = 0 } = opts;
-  const hasFilters = !!(opts.fromAddress || opts.afterDate || opts.beforeDate);
-  const modeUsed = resolveMode(opts);
+
+  // Parse inline operators from query string if present
+  let parsedQuery = opts.query || "";
+  let effectiveOpts = { ...opts };
+  if (opts.query && opts.query.trim()) {
+    const parsed = parseSearchQuery(opts.query);
+    // Merge parsed filters into opts (parsed filters override explicit opts)
+    if (parsed.fromAddress && !opts.fromAddress) effectiveOpts.fromAddress = parsed.fromAddress;
+    if (parsed.toAddress && !opts.toAddress) effectiveOpts.toAddress = parsed.toAddress;
+    if (parsed.subject && !opts.subject) effectiveOpts.subject = parsed.subject;
+    if (parsed.afterDate && !opts.afterDate) effectiveOpts.afterDate = parsed.afterDate;
+    if (parsed.beforeDate && !opts.beforeDate) effectiveOpts.beforeDate = parsed.beforeDate;
+    // Use parsed remainder as the query
+    parsedQuery = parsed.query;
+    
+    // If parser detected filter-only with OR/AND logic, use that flag
+    if (parsed.filterOr !== undefined) {
+      effectiveOpts.filterOr = parsed.filterOr;
+    }
+  }
+
+  const { query, limit = 20, offset = 0 } = effectiveOpts;
+  const hasFilters = !!(effectiveOpts.fromAddress || effectiveOpts.toAddress || effectiveOpts.subject || effectiveOpts.afterDate || effectiveOpts.beforeDate);
+  
+  // Update query in opts for mode resolution and search functions
+  effectiveOpts.query = parsedQuery;
+  
+  const modeUsed = resolveMode(effectiveOpts);
   const timings: SearchTimings = {
     totalMs: 0,
     modeUsed,
   };
 
-  if (!query?.trim() && hasFilters) {
-    const results = filterOnlySearch(db, opts);
+  if (!parsedQuery?.trim() && hasFilters) {
+    const results = filterOnlySearch(db, effectiveOpts);
     timings.totalMs = Date.now() - startedAt;
     return { results, timings };
   }
 
-  if (!query?.trim()) {
+  if (!parsedQuery?.trim()) {
     timings.totalMs = Date.now() - startedAt;
     return { results: [], timings };
   }
 
   if (modeUsed === "fts") {
     const ftsStart = Date.now();
-    const results = ftsSearch(db, opts);
+    const results = ftsSearch(db, effectiveOpts);
     timings.ftsMs = Date.now() - ftsStart;
     timings.totalMs = Date.now() - startedAt;
     return { results, timings };
   }
 
   if (modeUsed === "semantic") {
-    const semantic = await vectorSearchWithTimings(db, opts);
+    const semantic = await vectorSearchWithTimings(db, effectiveOpts);
     timings.embedMs = semantic.embedMs;
     timings.vectorMs = semantic.vectorMs;
     timings.totalMs = Date.now() - startedAt;
     return { results: semantic.results, timings };
   }
 
-  const semanticPromise = vectorSearchWithTimings(db, opts);
+  const semanticPromise = vectorSearchWithTimings(db, effectiveOpts);
   const ftsStart = Date.now();
-  const ftsResults = ftsSearch(db, opts);
+  const ftsResults = ftsSearch(db, effectiveOpts);
   timings.ftsMs = Date.now() - ftsStart;
   const semantic = await semanticPromise;
   timings.embedMs = semantic.embedMs;

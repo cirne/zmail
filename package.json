@@ -6,6 +6,7 @@
     "dev": "bun run src/index.ts",
     "sync": "bun run src/sync/index.ts",
     "build": "bun build src/index.ts --compile --outfile dist/zmail",
+    "install-cli": "bun run scripts/install-cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "lint": "tsc --noEmit"
@@ -18,6 +19,7 @@
     "mailparser": "^3.9.3",
     "openai": "latest",
     "postal-mime": "^2.7.3",
+    "search-query-parser": "^1.6.0",
     "turndown": "^7.2.2"
   },
   "devDependencies": {

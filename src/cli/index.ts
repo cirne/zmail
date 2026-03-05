@@ -71,9 +71,12 @@ interface ParsedSearchArgs {
 
 function searchUsage() {
   console.error("Usage: zmail search <query> [flags]");
-  console.error("  --from <address>   filter by sender email address");
-  console.error("  --after <date>     filter by date (ISO YYYY-MM-DD or relative: 7d, 2w, 1m)");
-  console.error("  --before <date>    filter by date (ISO YYYY-MM-DD or relative: 7d, 2w, 1m)");
+  console.error("");
+  console.error("Query can use inline operators: from:, to:, subject:, after:, before:");
+  console.error("  Example: zmail search \"from:alice@example.com invoice OR receipt\"");
+  console.error("  Example: zmail search \"after:7d subject:meeting\"");
+  console.error("");
+  console.error("Flags:");
   console.error("  --limit <n>        max results (default: 20)");
   console.error("  --mode <mode>      auto | fts | semantic | hybrid (default: auto)");
   console.error("  --detail <level>   headers | snippet | body (default: headers)");
@@ -282,9 +285,10 @@ function parseSearchArgs(rawArgs: string[]): ParsedSearchArgs {
   }
 
   parsed.query = queryParts.join(" ").trim();
-  const hasFilters = !!(parsed.fromAddress || parsed.afterDate || parsed.beforeDate);
-  if (!parsed.query && !hasFilters) {
-    throw new Error("Provide a query and/or filters (--from, --after, --before).");
+  // Query can be empty if filters are provided via inline operators (from:, after:, etc.)
+  // The search layer will parse inline operators from the query string
+  if (!parsed.query && !parsed.fromAddress && !parsed.afterDate && !parsed.beforeDate) {
+    throw new Error("Provide a query (e.g. zmail search \"from:alice@example.com invoice\").");
   }
 
   return parsed;
@@ -482,6 +486,18 @@ async function formatMessageForOutput(message: MessageRow, raw: boolean): Promis
   };
 }
 
+/** Token-efficient hint for unknown command so the agent can self-correct. */
+function getUnknownCommandHint(unknownCommand: string): string {
+  const c = unknownCommand.toLowerCase();
+  if (c === "show" || c === "get" || c === "open" || c === "view") {
+    return "Use: zmail read <message_id> to read a message, zmail search \"<query>\" to search.";
+  }
+  if (c === "find" || c === "lookup") {
+    return "Use: zmail search \"<query>\" or zmail who <query>.";
+  }
+  return "Run 'zmail' for usage.";
+}
+
 async function main() {
   switch (command) {
     case "sync": {
@@ -541,6 +557,7 @@ async function main() {
       } catch (err) {
         searchUsage();
         console.error(err instanceof Error ? `\n${err.message}` : String(err));
+        console.error("\nExample: zmail search \"from:alice@example.com invoice OR receipt\"");
         process.exit(1);
       }
 
@@ -675,10 +692,12 @@ async function main() {
       break;
     }
 
+    case "read":
     case "message": {
+      const readUsage = command === "read" ? "zmail read <message_id> [--raw]" : "zmail message <message_id> [--raw]";
       let parsed;
       try {
-        parsed = parseRawFlag(args, "zmail message <message_id> [--raw]");
+        parsed = parseRawFlag(args, readUsage);
       } catch (err) {
         console.error(err instanceof Error ? err.message : String(err));
         process.exit(1);
@@ -781,22 +800,25 @@ async function main() {
     }
 
     default: {
+      if (command) {
+        const hint = getUnknownCommandHint(command);
+        console.error(`Unknown command: ${command}. ${hint}`);
+        process.exit(1);
+      }
       console.log(`zmail — agent-first email
 
 Usage:
   zmail sync [--since <spec>]     Sync email + index embeddings (e.g. --since 7d, 5w, 3m, 2y)
   zmail search <query> [flags]    Search email (see --help for flags)
-  zmail who <query> [flags]      Find people by address or name (see --help for flags)
+  zmail who <query> [flags]       Find people by address or name (see --help for flags)
   zmail status                    Show sync and indexing status
   zmail stats                     Show database statistics
+  zmail read <id> [--raw]         Read a message (or: zmail message <id>)
   zmail thread <id> [--raw]       Fetch thread (Markdown by default; raw .eml with --raw)
-  zmail message <id> [--raw]      Fetch message (Markdown by default; raw .eml with --raw)
   zmail mcp                       Start MCP server (stdio)
+
+Run 'zmail setup' for setup instructions.
 `);
-      if (command) {
-        logger.error(`Unknown command: ${command}`);
-        process.exit(1);
-      }
     }
   }
 }

@@ -35,7 +35,7 @@ When you’re in Claude Code (or another coding agent) with zmail wired up, thes
 - **“When is my flight to Cabo taking off? What’s my confirmation number?”**  
   Agent: search for Cabo/travel/booking emails, find the itinerary or confirmation, return departure time and confirmation number.
 
-In each case: **user asks in plain language → LLM issues zmail search/get-thread/get-message (and attachment) calls → LLM assembles the answer.** No inbox opening, no manual digging. Reliable and fast.
+In each case: **user asks in plain language → LLM issues zmail search / zmail read (or thread) (and attachment) calls → LLM assembles the answer.** No inbox opening, no manual digging. Reliable and fast.
 
 ---
 
@@ -61,6 +61,10 @@ In each case: **user asks in plain language → LLM issues zmail search/get-thre
 5. **Open standard**
    - Agent tools should rely on a standard interface.
    - The system could become the **standard email filesystem for AI agents**.
+
+6. **Agent-intuitive interfaces**
+   - We optimize for **discoverability** and **iterative learning**: commands and query syntax should match what agents naturally try (e.g. `zmail search "from:... term OR term"`, `zmail read <message_id>`).
+   - When invocations fail, we output **token-efficient, corrective** help so the LLM can self-correct without a large generic help dump. The best CLI is the one the agent would instinctively use and can learn from iteratively — the agent analogue of a world-class human interface.
 
 ---
 
@@ -255,10 +259,12 @@ The system should expose multiple interfaces.
 Example commands:
 
 ```
-mail search "from:kirsten subject:contract"
-mail thread <thread_id>
-mail attachments --type=pdf
+zmail search "from:kirsten subject:contract"
+zmail read <message_id>     # or zmail message <message_id>
+zmail thread <thread_id>
 ```
+
+Search query can use inline operators: `from:`, `to:`, `subject:`, `after:`, `before:`, and free text with `OR`/`AND` (e.g. `zmail search "from:alice@example.com invoice OR receipt"`).
 
 ## Tool Interface
 

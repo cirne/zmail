@@ -12,7 +12,7 @@ Observed pain points:
 **Example (real cloud run):**
 
 - Hybrid query latency (`zmail search "opening eye in bedding calls" --json`) was ~588ms p50.
-- Filter-only query latency (`zmail search --from hello@theinformation.com --json`) was ~233ms p50.
+- Filter-only query latency (`zmail search "from:hello@theinformation.com" --json`) was ~233ms p50.
 - A broad search (`receipt`, `--limit 200`) produced truncated output and invalid JSON at 65,536 bytes.
 
 This gap shows that many agent tasks are paying hybrid + payload costs when they only need headers first.

@@ -19,7 +19,7 @@
   - **receivedCount** — emails **I** received **from** this person (from = them).
   - **mentionedCount** — emails where this person was in To/CC but **not** the sender (e.g. Donna sends to Tim and me → Tim is "mentioned").
 - **Output:** One row per address; `displayName` is best-known from sender headers (null for to/cc-only). TTY → table; piped or `--json` → `{ "query", "people": [ { "address", "displayName", "sentCount", "receivedCount", "mentionedCount" } ] }`. Order: sent_count DESC, received_count DESC, mentioned_count DESC.
-- **Agent-first:** Stable JSON so agents can follow up with `zmail search --from <address>` or `zmail message`.
+- **Agent-first:** Stable JSON so agents can follow up with `zmail search "from:<address>"` or `zmail read <message_id>`.
 
 ---
 

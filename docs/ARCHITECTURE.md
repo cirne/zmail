@@ -79,11 +79,13 @@ This layout applies to **both Phase 1 and Phase 2 (open source)**. Each user run
 ```
 zmail sync [--since <spec>]     ← sync + concurrent indexing
 zmail search <query> [flags]    ← header-first search with mode/detail controls
+                                  Query supports inline operators: from:, to:, subject:, after:, before:
+                                  Example: zmail search "from:alice@example.com invoice OR receipt"
 zmail who <query> [flags]        ← find people by address or display name (sent/received/mentioned counts)
 zmail status                    ← sync/indexing/search readiness
 zmail stats                     ← DB stats (volume + top senders/folders)
-zmail thread <id>               ← fetch full thread JSON
-zmail message <id>              ← fetch single message JSON
+zmail read <id> [--raw]         ← read a message (or: zmail message <id>)
+zmail thread <id> [--raw]       ← fetch full thread JSON
 zmail mcp                       ← start MCP server (stdio)
 ```
 

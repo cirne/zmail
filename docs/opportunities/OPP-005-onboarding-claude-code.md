@@ -1,10 +1,19 @@
-# OPP-005: Onboarding Workflow — Amazing First Run in Claude Code and OpenClau
+# OPP-005: Onboarding Workflow — Amazing First Run in Claude Code and OpenClaw
 
-**Problem:** New users in AI-assisted coding environments (Claude Code, OpenClau, Cursor, etc.) need to get the zmail CLI and configure their account with minimal friction. Today there is no single, agent-friendly path: no stable binary URL, no canonical “install + setup” flow, and no document optimized for LLM consumption. The result is brittle onboarding and repeated back-and-forth (“create an app password,” “where do I put it?”).
+**Problem:** New users in AI-assisted coding environments (Claude Code, OpenClaw, Cursor, etc.) need to get the zmail CLI and configure their account with minimal friction. Gaps that remain: no stable binary URL for “download zmail,” and no llms.txt/skill optimized for LLM consumption. The result can be brittle onboarding and repeated back-and-forth (“create an app password,” “where do I put it?”).
 
 **Example:** A user in Claude Code says “set up zmail for my Gmail.” The agent should be able to (1) download the right binary from a stable URL, (2) guide creation of `.env` with Gmail + app password, (3) run first sync and confirm success — without cloning the repo or asking the user to hunt for docs.
 
-**Vision:** Onboarding feels **amazing** in Claude Code and OpenClau: one skill or one doc gives the agent everything. First release is **CLI only**; MCP and web UI onboarding can follow later.
+**Vision:** Onboarding feels **amazing** in Claude Code and OpenClaw: one skill or one doc gives the agent everything. First release is **CLI only**; MCP and web UI onboarding can follow later.
+
+---
+
+## Implemented (current behavior)
+
+- **Help and setup without env** — `zmail --help`, `zmail -h`, `zmail help`, and `zmail setup` run before config is loaded, so they work with no `.env`. An agent can invoke `zmail` or `zmail setup` to discover usage and full setup instructions.
+- **Canonical onboarding text** — Single source in [`src/lib/onboarding.ts`](../../src/lib/onboarding.ts): `CLI_USAGE`, `SETUP_INSTRUCTIONS`, `ONBOARDING_HINT_MISSING_ENV`. Reuse in CLI, web, MCP, docs.
+- **Auto-onboarding on missing env** — Any invocation that fails due to a missing required env var (e.g. `zmail search "x"`, `zmail sync`, or `zmail` for web) prints the error and then the full `SETUP_INSTRUCTIONS`, then exits 1. No need to run `zmail setup` first; the agent gets setup in one shot from the first failing command.
+- **Local install script** — `bun run install-cli` builds and copies the binary to `~/.local/bin` (or `ZMAIL_INSTALL_DIR`) for testing the compiled CLI from another directory. See [AGENTS.md](../../AGENTS.md).
 
 ---
 
@@ -13,7 +22,7 @@
 - **Stable release location** — Published binaries at a predictable URL (e.g. GitHub Releases or a dedicated download domain) so “download zmail” is a single step.
 - **Agent-first skill** — A Cursor/Codex-style skill (or equivalent) that any agent can follow: download → configure `.env` → verify. Single source of truth; no duplicate prose.
 - **Minimal secrets** — User provides: Gmail address and a Gmail **app password** (not main password). Optional: `OPENAI_API_KEY` for semantic search. Everything else has sensible defaults.
-- **Discoverability for LLMs** — Consider publishing an **llms.txt** so models (and thus Claude Code / OpenClau) have a dense, curated map of “what is zmail, how to install, how to configure.”
+- **Discoverability for LLMs** — Consider publishing an **llms.txt** so models (and thus Claude Code / OpenClaw) have a dense, curated map of “what is zmail, how to install, how to configure.”
 
 ---
 
@@ -72,7 +81,7 @@ The skill can live in this repo (e.g. `.cursor/skills/zmail-onboard/SKILL.md`) a
 
 **What it is:** [llms.txt](https://llmstxt.org/) is a convention for LLM discoverability: a markdown file at a well-known URL (e.g. `/llms.txt` on a project website, or in the repo root) that gives models a curated, dense map of the project — “what is this, how to install, how to configure” — without scraping entire docs.
 
-**Why it helps:** Claude Code and OpenClau (and other AI coding tools) can fetch or be given the repo or a project URL. An llms.txt gives them one document to read for onboarding: name, one-line summary, install from stable URL, minimal env vars, app password link, first commands. Reduces hallucination and repeated “where’s the setup?” loops.
+**Why it helps:** Claude Code and OpenClaw (and other AI coding tools) can fetch or be given the repo or a project URL. An llms.txt gives them one document to read for onboarding: name, one-line summary, install from stable URL, minimal env vars, app password link, first commands. Reduces hallucination and repeated “where’s the setup?” loops.
 
 **Recommendation:** **Yes, publish an llms.txt.**
 
@@ -103,6 +112,7 @@ This keeps the “amazing first run” story in one place for both humans and LL
 
 ## See also
 
-- [AGENTS.md](../../AGENTS.md) — env vars, commands, single source of truth.
+- [AGENTS.md](../../AGENTS.md) — env vars, commands, onboarding behavior, single source of truth.
 - [.env.example](../../.env.example) — canonical env list.
+- [src/lib/onboarding.ts](../../src/lib/onboarding.ts) — canonical CLI usage and setup text (no deps).
 - [OPP-003](OPP-003-cli-search-interface.md) — CLI search interface (post-onboarding agent usage).
