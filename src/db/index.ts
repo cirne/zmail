@@ -10,9 +10,13 @@ let _db: Database | null = null;
 export function getDb(): Database {
   if (_db) return _db;
 
-  mkdirSync(dirname(config.dbPath), { recursive: true });
-
-  _db = new Database(config.dbPath, { create: true });
+  const mode = process.env.ZMAIL_DB_MODE ?? "file";
+  if (mode === "memory") {
+    _db = new Database(":memory:");
+  } else {
+    mkdirSync(dirname(config.dbPath), { recursive: true });
+    _db = new Database(config.dbPath, { create: true });
+  }
   _db.run("PRAGMA journal_mode = WAL");
   _db.run("PRAGMA foreign_keys = ON");
   _db.run("PRAGMA synchronous = NORMAL");
@@ -29,7 +33,7 @@ export function getDb(): Database {
     "INSERT OR IGNORE INTO indexing_status (id) VALUES (1)"
   );
 
-  logger.debug("Database opened", { path: config.dbPath });
+  logger.debug("Database opened", { mode, path: mode === "memory" ? ":memory:" : config.dbPath });
   return _db;
 }
 
