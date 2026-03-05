@@ -64,8 +64,18 @@ describe("database schema", () => {
       expect(names).toContain("indexed_so_far");
       expect(names).toContain("failed");
       expect(names).toContain("started_at");
-      expect(names).toContain("last_updated_at");
       expect(names).toContain("completed_at");
+      expect(names).toContain("owner_pid");
+      expect(names).not.toContain("last_updated_at");
+    });
+
+    it("sync_summary has owner_pid column", () => {
+      const cols = db
+        .query("PRAGMA table_info(sync_summary)")
+        .all() as { name: string }[];
+      const names = cols.map((c) => c.name);
+      expect(names).toContain("owner_pid");
+      expect(names).toContain("is_running");
     });
   });
 
@@ -139,6 +149,34 @@ describe("database schema", () => {
     });
   });
 
+  describe("embedding_state", () => {
+    it("defaults to 'pending' on message insert", () => {
+      const messageId = insertTestMessage(db, { subject: "New email" });
+      const row = db
+        .query("SELECT embedding_state FROM messages WHERE message_id = ?")
+        .get(messageId) as { embedding_state: string };
+      expect(row.embedding_state).toBe("pending");
+    });
+
+    it("can transition through claim → done lifecycle", () => {
+      const messageId = insertTestMessage(db);
+      db.run("UPDATE messages SET embedding_state = 'claimed' WHERE message_id = ?", [messageId]);
+      let row = db.query("SELECT embedding_state FROM messages WHERE message_id = ?").get(messageId) as { embedding_state: string };
+      expect(row.embedding_state).toBe("claimed");
+
+      db.run("UPDATE messages SET embedding_state = 'done' WHERE message_id = ?", [messageId]);
+      row = db.query("SELECT embedding_state FROM messages WHERE message_id = ?").get(messageId) as { embedding_state: string };
+      expect(row.embedding_state).toBe("done");
+    });
+
+    it("can be marked as 'failed'", () => {
+      const messageId = insertTestMessage(db);
+      db.run("UPDATE messages SET embedding_state = 'failed' WHERE message_id = ?", [messageId]);
+      const row = db.query("SELECT embedding_state FROM messages WHERE message_id = ?").get(messageId) as { embedding_state: string };
+      expect(row.embedding_state).toBe("failed");
+    });
+  });
+
   describe("indexes", () => {
     it("creates expected indexes", () => {
       const indexes = db
@@ -152,6 +190,7 @@ describe("database schema", () => {
       expect(names).toContain("idx_messages_date");
       expect(names).toContain("idx_messages_folder");
       expect(names).toContain("idx_attachments_msg");
+      expect(names).toContain("idx_messages_embed_state");
     });
   });
 });

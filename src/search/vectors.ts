@@ -105,29 +105,11 @@ export async function searchVectors(
 
 /**
  * Check if an embedding exists for a given messageId.
+ * Uses SQLite embedding_state as the source of truth.
  */
-export async function hasEmbedding(messageId: string): Promise<boolean> {
-  const embeddedIds = await getAllEmbeddedMessageIds();
-  return embeddedIds.has(messageId);
-}
-
-/**
- * Get all messageIds that have embeddings.
- * Useful for backfill operations.
- */
-export async function getAllEmbeddedMessageIds(): Promise<Set<string>> {
-  try {
-    const tbl = await getTable();
-    if (!tbl) {
-      return new Set();
-    }
-    // LanceDB doesn't have a simple "list all" API, so we use a dummy zero vector
-    // and search with a high limit. This returns all rows.
-    const zeroVector = new Array(1536).fill(0); // text-embedding-3-small dimension
-    const results = await tbl.search(zeroVector).limit(1000000).toArray();
-    return new Set(results.map((r: any) => r.messageId as string));
-  } catch (err) {
-    // Table might not exist yet or be empty
-    return new Set();
-  }
+export function hasEmbedding(db: import("bun:sqlite").Database, messageId: string): boolean {
+  const row = db
+    .query("SELECT 1 FROM messages WHERE message_id = ? AND embedding_state = 'done'")
+    .get(messageId);
+  return !!row;
 }

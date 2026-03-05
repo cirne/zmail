@@ -248,7 +248,7 @@ Window 5:  remaining to target date
 
 Each window fetches, parses, and indexes completely before the next begins. IMAP `UID SEARCH SINCE <date>` defines each window; UIDs are fetched highest-first within the window so most recent messages arrive first.
 
-**Default backfill:** 1 year. Configurable via `SYNC_FROM_DATE` env var.
+**Default backfill:** 1 year. Set via CLI: `zmail sync --since 7d | 5w | 3m | 2y` (default: 1y). Override default via `DEFAULT_SYNC_SINCE` env var.
 
 **Crash recovery:** Each window is atomic — if sync crashes mid-window, it restarts from the beginning of the incomplete window. No partial state to reconcile.
 
@@ -259,7 +259,7 @@ Each window fetches, parses, and indexes completely before the next begins. IMAP
 sync_windows  (id, phase, window_start, window_end, status,
                messages_found, messages_synced, started_at, completed_at)
 sync_summary  (earliest_synced_date, latest_synced_date, total_messages,
-               last_sync_at, is_running)
+               last_sync_at, is_running, owner_pid)
 ```
 
 ---
@@ -373,43 +373,62 @@ We do **not** introduce async job IDs or a job queue for sync unless we later ne
 
 ---
 
-### ADR-020: Sync and Indexing — Two Concurrent Workers, One Command
+### ADR-020: Sync and Indexing — Concurrent, Single-Threaded, Resilient
 
-**Decision:** `zmail sync` is the single user-facing command. Under the hood, it orchestrates two concurrent workers in the same process:
+**Decision:** `zmail sync` is the single user-facing command. Under the hood, it launches sync and indexing concurrently via `Promise.all` in a single thread:
 
-1. **Sync worker** (bandwidth-bound): IMAP fetch → write `.eml` to maildir → insert into SQLite. Optimized to saturate network bandwidth (ADR-016/017).
-2. **Index worker** (API-rate-bound): Read un-indexed messages from SQLite → generate embeddings via OpenAI → write to LanceDB. Runs with maximum parallelism the API key allows.
+1. **Sync** (bandwidth-bound): IMAP fetch → write `.eml` to maildir → insert into SQLite with `embedding_state = 'pending'`. Optimized to saturate network bandwidth (ADR-016/017).
+2. **Indexing** (API-rate-bound): Claim pending messages from SQLite → generate embeddings via OpenAI → write to LanceDB → mark `embedding_state = 'done'`. Multiple embedding batches in-flight concurrently.
 
 ```
 zmail sync
-├── Sync worker:  IMAP → maildir + SQLite  (bandwidth-bound)
-└── Index worker: SQLite → OpenAI → LanceDB  (API-rate-bound)
+├── Sync:     IMAP → maildir + SQLite  (bandwidth-bound)
+└── Indexing: SQLite → OpenAI → LanceDB  (API-rate-bound, async-pipelined)
+    ├── batch 1 in-flight (OpenAI API call)
+    ├── batch 2 in-flight (OpenAI API call)
+    └── ... up to INDEXER_CONCURRENCY
 ```
+
+**Single-threaded, async-pipelined architecture.** Both sync and indexing run in the same OS thread. The indexing orchestrator keeps N embedding batches in-flight concurrently via `Promise.all`/`Promise.race` — the OpenAI API is the bottleneck, not CPU, so async I/O saturates the rate limit without thread overhead. Only the main thread touches SQLite, eliminating cross-thread lock contention entirely.
+
+This replaces an earlier multi-worker design that used Bun Workers. That design was abandoned due to SQLite single-writer contention and Bun Worker stability issues. The async-pipelined approach achieves the same throughput for I/O-bound work with a much simpler execution model.
+
+**DB-backed indexing queue.** The `messages` table tracks indexing progress per-message via an `embedding_state` column:
+
+```
+pending → claimed → done
+                  → failed
+```
+
+- `pending`: Newly synced, awaiting indexing. A partial index on this column makes queue polling fast.
+- `claimed`: Atomically claimed by `claimBatch()` inside a transaction. Prevents double-processing.
+- `done`: Embedding generated and written to LanceDB.
+- `failed`: Embedding or upsert failed (logged, not retried automatically).
+
+On startup, the indexer resets any `claimed` rows back to `pending` (stale claims from a crashed process).
+
+**PID-based advisory locks.** Each subsystem has a singleton status row (`sync_summary`, `indexing_status`) with `is_running` and `owner_pid` columns. Before starting:
+
+1. Read `is_running` and `owner_pid`.
+2. If locked and `owner_pid` is alive (`kill(pid, 0)`), exit early — another instance is running.
+3. If locked but `owner_pid` is dead, take over the lock (log a warning, reset stale state).
+4. On completion or error, clear `is_running` and `owner_pid`.
+
+This replaces timestamp-based staleness detection. PID checks are instantaneous and deterministic — no arbitrary timeout windows, no false positives from slow runs, no false negatives from clock skew.
 
 **Progressive availability:** Synced messages are immediately available for FTS5/keyword search and direct fetch. Semantic search becomes available progressively as the indexer catches up — like a database serving queries while building an index in the background.
 
-**Concurrency model:**
-- Sync and indexing run **concurrently with each other** (different write targets: SQLite vs. LanceDB — no contention).
-- Neither runs **concurrently with itself** (advisory lock via DB flag per worker).
-- Both workers share the same process. No IPC, no daemon, no job queue.
-- `zmail sync` waits for both workers to complete before exiting.
-- If `OPENAI_API_KEY` is not set, sync runs alone (FTS-only mode, no indexing).
-
-**Advisory lock pattern:**
-- Each worker has an `is_running` flag in its status table (`sync_summary`, `indexing_status`).
-- Before starting, check the flag. If set and `last_updated_at` is recent (< 5 min), exit early.
-- If `last_updated_at` is stale, assume the previous run crashed and take over the lock.
-- On completion or error, clear the flag.
+**Always-hybrid search.** Search always runs FTS5 and semantic search in parallel, merging results via Reciprocal Rank Fusion (RRF). There are no separate search "modes." `OPENAI_API_KEY` is required. Messages that haven't been indexed yet are still findable via FTS5; they just don't contribute to the semantic half of the ranking.
 
 **Observability:**
-- Both workers track progress in the DB (`sync_summary`, `indexing_status`).
+- Both subsystems track progress in the DB (`sync_summary`, `indexing_status`).
 - `zmail status` reads both tables and reports current state.
 - Agents and remote clients can poll status at any time without depending on stdout.
 - Stdout progress lines are emitted periodically for environments that stream output.
 
 **No standalone indexing command.** There is no `zmail index` or backfill tool. `zmail sync` is the only entry point for data ingestion and indexing — one command, one process.
 
-**Rationale:** Embedding via an external API (OpenAI) adds ~50–100ms latency per message. Running this inline during sync would make sync API-bound instead of bandwidth-bound, violating ADR-016. Separating the two workers lets each optimize for its own bottleneck while presenting a single command to the user.
+**Rationale:** Embedding via an external API (OpenAI) adds ~50–100ms latency per message. Running this inline during sync would make sync API-bound instead of bandwidth-bound, violating ADR-016. Async-pipelined indexing lets each subsystem optimize for its own bottleneck while keeping the execution model simple: one thread, one process, no IPC.
 
 ---
 

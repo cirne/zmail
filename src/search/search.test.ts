@@ -10,28 +10,28 @@ describe("search", () => {
     db = createTestDb();
   });
 
-  it("returns empty array when no messages exist", () => {
-    const results = search(db, { query: "anything" });
+  it("returns empty array when no messages exist", async () => {
+    const results = await search(db, { query: "anything" });
     expect(results).toEqual([]);
   });
 
-  it("finds a message by subject keyword", () => {
+  it("finds a message by subject keyword", async () => {
     insertTestMessage(db, { subject: "Invoice from Stripe" });
-    const results = search(db, { query: "Invoice" });
+    const results = await search(db, { query: "Invoice" });
     expect(results.length).toBe(1);
     expect(results[0].subject).toBe("Invoice from Stripe");
   });
 
-  it("finds a message by body keyword", () => {
+  it("finds a message by body keyword", async () => {
     insertTestMessage(db, {
       subject: "Meeting notes",
       bodyText: "We discussed the Q4 roadmap and budget allocation",
     });
-    const results = search(db, { query: "roadmap" });
+    const results = await search(db, { query: "roadmap" });
     expect(results.length).toBe(1);
   });
 
-  it("returns multiple matches ranked by relevance", () => {
+  it("returns multiple matches ranked by relevance", async () => {
     insertTestMessage(db, {
       subject: "Contract renewal",
       bodyText: "Please review the attached contract for renewal",
@@ -45,26 +45,26 @@ describe("search", () => {
       bodyText: "Lunch plans for tomorrow",
     });
 
-    const results = search(db, { query: "contract" });
+    const results = await search(db, { query: "contract" });
     expect(results.length).toBe(2);
   });
 
-  it("respects the limit option", () => {
+  it("respects the limit option", async () => {
     for (let i = 0; i < 5; i++) {
       insertTestMessage(db, { subject: `Report number ${i}`, bodyText: "report content" });
     }
-    const results = search(db, { query: "report", limit: 3 });
+    const results = await search(db, { query: "report", limit: 3 });
     expect(results.length).toBe(3);
   });
 
-  it("returns expected fields on each result", () => {
+  it("returns expected fields on each result", async () => {
     insertTestMessage(db, {
       subject: "Hello from Alice",
       fromAddress: "alice@example.com",
       bodyText: "Just checking in",
     });
 
-    const results = search(db, { query: "Hello" });
+    const results = await search(db, { query: "Hello" });
     expect(results.length).toBe(1);
 
     const r = results[0];
@@ -77,19 +77,18 @@ describe("search", () => {
     expect(r.rank).toBeDefined();
   });
 
-  it("does not return messages that do not match", () => {
+  it("does not return messages that do not match", async () => {
     insertTestMessage(db, { subject: "Cats are great", bodyText: "I love cats" });
-    const results = search(db, { query: "dogs" });
+    const results = await search(db, { query: "dogs" });
     expect(results.length).toBe(0);
   });
 
-  it("handles FTS special characters without throwing", () => {
+  it("handles FTS special characters without throwing", async () => {
     insertTestMessage(db, { subject: "Normal email" });
-    // These are common user inputs that could break naive FTS queries
-    expect(() => search(db, { query: "hello world" })).not.toThrow();
+    expect(async () => await search(db, { query: "hello world" })).not.toThrow();
   });
 
-  it("filters by fromAddress", () => {
+  it("filters by fromAddress", async () => {
     insertTestMessage(db, {
       subject: "Message from Alice",
       fromAddress: "alice@example.com",
@@ -101,12 +100,12 @@ describe("search", () => {
       bodyText: "Hello",
     });
 
-    const results = search(db, { query: "Hello", fromAddress: "alice@example.com" });
+    const results = await search(db, { query: "Hello", fromAddress: "alice@example.com" });
     expect(results.length).toBe(1);
     expect(results[0].fromAddress).toBe("alice@example.com");
   });
 
-  it("filters by afterDate", () => {
+  it("filters by afterDate", async () => {
     insertTestMessage(db, {
       subject: "Old message",
       date: "2024-01-01T00:00:00Z",
@@ -118,12 +117,12 @@ describe("search", () => {
       bodyText: "test",
     });
 
-    const results = search(db, { query: "test", afterDate: "2024-06-01" });
+    const results = await search(db, { query: "test", afterDate: "2024-06-01" });
     expect(results.length).toBe(1);
     expect(results[0].subject).toBe("Recent message");
   });
 
-  it("filters by beforeDate", () => {
+  it("filters by beforeDate", async () => {
     insertTestMessage(db, {
       subject: "Old message",
       date: "2024-01-01T00:00:00Z",
@@ -135,12 +134,12 @@ describe("search", () => {
       bodyText: "test",
     });
 
-    const results = search(db, { query: "test", beforeDate: "2024-06-01" });
+    const results = await search(db, { query: "test", beforeDate: "2024-06-01" });
     expect(results.length).toBe(1);
     expect(results[0].subject).toBe("Old message");
   });
 
-  it("combines multiple filters", () => {
+  it("combines multiple filters", async () => {
     insertTestMessage(db, {
       subject: "Match 1",
       fromAddress: "alice@example.com",
@@ -160,12 +159,29 @@ describe("search", () => {
       bodyText: "contract discussion",
     });
 
-    const results = search(db, {
+    const results = await search(db, {
       query: "contract",
       fromAddress: "alice@example.com",
       afterDate: "2024-06-01",
     });
     expect(results.length).toBe(1);
     expect(results[0].subject).toBe("Match 1");
+  });
+
+  it("filter-only search returns results sorted by date", async () => {
+    insertTestMessage(db, {
+      subject: "Older",
+      fromAddress: "alice@example.com",
+      date: "2024-01-01T00:00:00Z",
+    });
+    insertTestMessage(db, {
+      subject: "Newer",
+      fromAddress: "alice@example.com",
+      date: "2024-12-01T00:00:00Z",
+    });
+
+    const results = await search(db, { fromAddress: "alice" });
+    expect(results.length).toBe(2);
+    expect(results[0].subject).toBe("Newer");
   });
 });

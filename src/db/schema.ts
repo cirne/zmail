@@ -16,8 +16,10 @@ export const SCHEMA = /* sql */ `
     date         TEXT NOT NULL,
     body_text    TEXT NOT NULL DEFAULT '',
     raw_path     TEXT NOT NULL,
-    synced_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    synced_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    embedding_state TEXT NOT NULL DEFAULT 'pending'
   );
+  -- embedding_state: 'pending' | 'claimed' | 'done' | 'failed'
   -- labels: JSON array of label/tag names (Gmail: X-GM-LABELS; generic: optional).
   -- Enables "inbox only", "starred", "archive" filters without re-syncing.
 
@@ -69,7 +71,8 @@ export const SCHEMA = /* sql */ `
     latest_synced_date   TEXT,
     total_messages       INTEGER NOT NULL DEFAULT 0,
     last_sync_at         TEXT,
-    is_running           INTEGER NOT NULL DEFAULT 0
+    is_running           INTEGER NOT NULL DEFAULT 0,
+    owner_pid            INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS indexing_status (
@@ -79,8 +82,8 @@ export const SCHEMA = /* sql */ `
     indexed_so_far    INTEGER NOT NULL DEFAULT 0,
     failed            INTEGER NOT NULL DEFAULT 0,
     started_at        TEXT,
-    last_updated_at   TEXT,
-    completed_at      TEXT
+    completed_at      TEXT,
+    owner_pid         INTEGER
   );
 
   -- FTS5 full-text search index over message subjects and bodies
@@ -120,4 +123,6 @@ export const SCHEMA = /* sql */ `
   CREATE INDEX IF NOT EXISTS idx_messages_date    ON messages(date DESC);
   CREATE INDEX IF NOT EXISTS idx_messages_folder  ON messages(folder, uid);
   CREATE INDEX IF NOT EXISTS idx_attachments_msg  ON attachments(message_id);
+  CREATE INDEX IF NOT EXISTS idx_messages_embed_state ON messages(embedding_state)
+    WHERE embedding_state = 'pending';
 `;

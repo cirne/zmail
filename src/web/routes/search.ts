@@ -5,10 +5,10 @@ import { search } from "~/search";
 
 export const searchRoutes = new Hono();
 
-searchRoutes.get("/", (c) => {
+searchRoutes.get("/", async (c) => {
   const q = c.req.query("q") ?? "";
   const db = getDb();
-  const results = q ? search(db, { query: q }) : [];
+  const results = q ? await search(db, { query: q }) : [];
 
   return c.html(html`
     <!doctype html>

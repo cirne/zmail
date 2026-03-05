@@ -1,105 +1,188 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import type { Database } from "bun:sqlite";
-import { createTestDb } from "~/db/test-helpers";
+import { createTestDb, insertTestMessage } from "~/db/test-helpers";
+import { claimBatch, resetStaleClaims, isSyncRunning, BATCH_SIZE } from "./indexing";
+import { hasEmbedding } from "./vectors";
 
-describe("indexing advisory lock", () => {
+function freshDb(): Database {
+  return createTestDb();
+}
+
+describe("claimBatch", () => {
+  let db: Database;
+
+  beforeEach(() => {
+    db = freshDb();
+  });
+
+  it("returns empty array when no pending messages exist", () => {
+    const batch = claimBatch(db, 10);
+    expect(batch).toEqual([]);
+  });
+
+  it("claims pending messages and sets state to 'claimed'", () => {
+    const mid = insertTestMessage(db, { subject: "Test email" });
+    const batch = claimBatch(db, 10);
+
+    expect(batch.length).toBe(1);
+    expect(batch[0].message_id).toBe(mid);
+
+    const row = db
+      .query("SELECT embedding_state FROM messages WHERE message_id = ?")
+      .get(mid) as { embedding_state: string };
+    expect(row.embedding_state).toBe("claimed");
+  });
+
+  it("respects the batch size limit", () => {
+    for (let i = 0; i < 5; i++) {
+      insertTestMessage(db, { subject: `Email ${i}` });
+    }
+
+    const batch = claimBatch(db, 3);
+    expect(batch.length).toBe(3);
+
+    const remaining = db
+      .query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'pending'")
+      .get() as { c: number };
+    expect(remaining.c).toBe(2);
+  });
+
+  it("does not return already-claimed messages", () => {
+    insertTestMessage(db, { subject: "First" });
+    insertTestMessage(db, { subject: "Second" });
+
+    const batch1 = claimBatch(db, 1);
+    const batch2 = claimBatch(db, 10);
+
+    expect(batch1.length).toBe(1);
+    expect(batch2.length).toBe(1);
+    expect(batch1[0].message_id).not.toBe(batch2[0].message_id);
+  });
+
+  it("skips messages with 'done' or 'failed' state", () => {
+    const done = insertTestMessage(db, { subject: "Done" });
+    const failed = insertTestMessage(db, { subject: "Failed" });
+    const pending = insertTestMessage(db, { subject: "Pending" });
+
+    db.run("UPDATE messages SET embedding_state = 'done' WHERE message_id = ?", [done]);
+    db.run("UPDATE messages SET embedding_state = 'failed' WHERE message_id = ?", [failed]);
+
+    const batch = claimBatch(db, 10);
+    expect(batch.length).toBe(1);
+    expect(batch[0].message_id).toBe(pending);
+  });
+
+  it("returns expected fields on each row", () => {
+    insertTestMessage(db, {
+      subject: "Important meeting",
+      bodyText: "Let's discuss Q4",
+      fromAddress: "boss@company.com",
+      date: "2024-06-15T10:00:00Z",
+    });
+
+    const batch = claimBatch(db, 1);
+    expect(batch[0].id).toBeDefined();
+    expect(batch[0].message_id).toBeDefined();
+    expect(batch[0].subject).toBe("Important meeting");
+    expect(batch[0].body_text).toBe("Let's discuss Q4");
+    expect(batch[0].from_address).toBe("boss@company.com");
+    expect(batch[0].date).toBe("2024-06-15T10:00:00Z");
+  });
+});
+
+describe("resetStaleClaims", () => {
+  it("resets 'claimed' messages back to 'pending'", () => {
+    const db = freshDb();
+    const mid = insertTestMessage(db);
+    db.run("UPDATE messages SET embedding_state = 'claimed' WHERE message_id = ?", [mid]);
+
+    const count = resetStaleClaims(db);
+    expect(count).toBe(1);
+
+    const row = db
+      .query("SELECT embedding_state FROM messages WHERE message_id = ?")
+      .get(mid) as { embedding_state: string };
+    expect(row.embedding_state).toBe("pending");
+  });
+
+  it("does not touch 'done' or 'failed' messages", () => {
+    const db = freshDb();
+    const done = insertTestMessage(db, { subject: "Done" });
+    const failed = insertTestMessage(db, { subject: "Failed" });
+
+    db.run("UPDATE messages SET embedding_state = 'done' WHERE message_id = ?", [done]);
+    db.run("UPDATE messages SET embedding_state = 'failed' WHERE message_id = ?", [failed]);
+
+    const count = resetStaleClaims(db);
+    expect(count).toBe(0);
+
+    const doneRow = db.query("SELECT embedding_state FROM messages WHERE message_id = ?").get(done) as { embedding_state: string };
+    const failedRow = db.query("SELECT embedding_state FROM messages WHERE message_id = ?").get(failed) as { embedding_state: string };
+    expect(doneRow.embedding_state).toBe("done");
+    expect(failedRow.embedding_state).toBe("failed");
+  });
+
+  it("returns 0 when nothing to reset", () => {
+    const db = freshDb();
+    insertTestMessage(db);
+    const count = resetStaleClaims(db);
+    expect(count).toBe(0);
+  });
+});
+
+describe("hasEmbedding", () => {
   let db: Database;
 
   beforeEach(() => {
     db = createTestDb();
   });
 
-  it("starts with is_running = 0", () => {
-    const row = db.query("SELECT is_running FROM indexing_status WHERE id = 1").get() as {
-      is_running: number;
-    };
-    expect(row.is_running).toBe(0);
+  it("returns false for a pending message", () => {
+    const mid = insertTestMessage(db);
+    expect(hasEmbedding(db, mid)).toBe(false);
   });
 
-  it("can acquire lock by setting is_running = 1", () => {
-    db.run(
-      `UPDATE indexing_status SET
-        is_running = 1,
-        total_to_index = 10,
-        indexed_so_far = 0,
-        failed = 0,
-        started_at = datetime('now'),
-        last_updated_at = datetime('now'),
-        completed_at = NULL
-      WHERE id = 1`
-    );
-
-    const row = db.query("SELECT is_running, total_to_index FROM indexing_status WHERE id = 1").get() as {
-      is_running: number;
-      total_to_index: number;
-    };
-    expect(row.is_running).toBe(1);
-    expect(row.total_to_index).toBe(10);
+  it("returns true for a message with embedding_state = 'done'", () => {
+    const mid = insertTestMessage(db);
+    db.run("UPDATE messages SET embedding_state = 'done' WHERE message_id = ?", [mid]);
+    expect(hasEmbedding(db, mid)).toBe(true);
   });
 
-  it("can track progress via indexed_so_far", () => {
-    db.run(
-      `UPDATE indexing_status SET is_running = 1, total_to_index = 50, indexed_so_far = 0 WHERE id = 1`
-    );
+  it("returns false for 'claimed' or 'failed' messages", () => {
+    const claimed = insertTestMessage(db, { subject: "Claimed" });
+    const failed = insertTestMessage(db, { subject: "Failed" });
 
-    db.run(`UPDATE indexing_status SET indexed_so_far = 25, last_updated_at = datetime('now') WHERE id = 1`);
+    db.run("UPDATE messages SET embedding_state = 'claimed' WHERE message_id = ?", [claimed]);
+    db.run("UPDATE messages SET embedding_state = 'failed' WHERE message_id = ?", [failed]);
 
-    const row = db.query("SELECT indexed_so_far, total_to_index FROM indexing_status WHERE id = 1").get() as {
-      indexed_so_far: number;
-      total_to_index: number;
-    };
-    expect(row.indexed_so_far).toBe(25);
-    expect(row.total_to_index).toBe(50);
+    expect(hasEmbedding(db, claimed)).toBe(false);
+    expect(hasEmbedding(db, failed)).toBe(false);
   });
 
-  it("can release lock and record completion", () => {
-    db.run(`UPDATE indexing_status SET is_running = 1, total_to_index = 10 WHERE id = 1`);
+  it("returns false for a non-existent message_id", () => {
+    expect(hasEmbedding(db, "<nonexistent@example.com>")).toBe(false);
+  });
+});
 
-    db.run(
-      `UPDATE indexing_status SET
-        is_running = 0,
-        indexed_so_far = 8,
-        failed = 2,
-        last_updated_at = datetime('now'),
-        completed_at = datetime('now')
-      WHERE id = 1`
-    );
+describe("isSyncRunning", () => {
+  let db: Database;
 
-    const row = db.query("SELECT * FROM indexing_status WHERE id = 1").get() as {
-      is_running: number;
-      indexed_so_far: number;
-      failed: number;
-      completed_at: string | null;
-    };
-    expect(row.is_running).toBe(0);
-    expect(row.indexed_so_far).toBe(8);
-    expect(row.failed).toBe(2);
-    expect(row.completed_at).not.toBeNull();
+  beforeEach(() => {
+    db = createTestDb();
   });
 
-  it("detects stale lock via last_updated_at", () => {
-    // Simulate a crashed process: is_running=1 but last_updated_at is old
-    db.run(
-      `UPDATE indexing_status SET
-        is_running = 1,
-        last_updated_at = datetime('now', '-10 minutes')
-      WHERE id = 1`
-    );
-
-    const row = db.query("SELECT is_running, last_updated_at FROM indexing_status WHERE id = 1").get() as {
-      is_running: number;
-      last_updated_at: string;
-    };
-    expect(row.is_running).toBe(1);
-
-    const lastUpdate = new Date(row.last_updated_at).getTime();
-    const staleMs = 5 * 60 * 1000;
-    expect(Date.now() - lastUpdate).toBeGreaterThan(staleMs);
+  it("returns false when sync is not running", () => {
+    expect(isSyncRunning(db)).toBe(false);
   });
 
-  it("enforces singleton constraint (id = 1)", () => {
-    expect(() =>
-      db.run("INSERT INTO indexing_status (id) VALUES (2)")
-    ).toThrow();
+  it("returns true when sync is running", () => {
+    db.run("UPDATE sync_summary SET is_running = 1 WHERE id = 1");
+    expect(isSyncRunning(db)).toBe(true);
+  });
+
+  it("returns false after sync stops", () => {
+    db.run("UPDATE sync_summary SET is_running = 1 WHERE id = 1");
+    db.run("UPDATE sync_summary SET is_running = 0 WHERE id = 1");
+    expect(isSyncRunning(db)).toBe(false);
   });
 });

@@ -1,19 +1,18 @@
 /**
- * Indexing worker for embeddings (ADR-020).
- * Runs concurrently with sync but never with itself.
- * Advisory lock via indexing_status.is_running in SQLite.
- * Progress tracked in DB so remote clients can poll.
+ * Indexing orchestrator (ADR-020).
+ * Single-thread, async-pipelined architecture.
+ * Multiple embedding batches are in-flight concurrently (OpenAI API is the bottleneck,
+ * not CPU), while only this thread touches SQLite (no cross-thread lock contention).
+ * Uses PID-based lock to prevent concurrent indexing runs.
  */
 
 import type { Database } from "bun:sqlite";
 import { getDb } from "~/db";
 import { logger } from "~/lib/logger";
 import { config } from "~/lib/config";
+import { acquireLock, releaseLock } from "~/lib/process-lock";
 import { embedBatch, prepareTextForEmbedding } from "./embeddings";
-import { upsertEmbedding, getAllEmbeddedMessageIds } from "./vectors";
-
-const BATCH_SIZE = 100;
-const STALE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+import { upsertEmbedding } from "./vectors";
 
 export interface IndexingResult {
   indexed: number;
@@ -23,202 +22,261 @@ export interface IndexingResult {
   messagesPerMinute: number;
 }
 
-interface IndexingStatus {
-  is_running: number;
-  total_to_index: number;
-  indexed_so_far: number;
-  failed: number;
-  started_at: string | null;
-  last_updated_at: string | null;
-  completed_at: string | null;
-}
+export const BATCH_SIZE = 100;
 
-function getStatus(db: Database): IndexingStatus {
-  return db.query("SELECT * FROM indexing_status WHERE id = 1").get() as IndexingStatus;
-}
-
-function acquireLock(db: Database, total: number): boolean {
-  const status = getStatus(db);
-
-  if (status.is_running) {
-    // Check for stale lock (crash recovery)
-    if (status.last_updated_at) {
-      const lastUpdate = new Date(status.last_updated_at).getTime();
-      if (Date.now() - lastUpdate > STALE_TIMEOUT_MS) {
-        logger.warn("Stale indexing lock detected, taking over", {
-          lastUpdated: status.last_updated_at,
-        });
-        // Fall through to acquire
-      } else {
-        return false; // Active lock, skip
-      }
-    } else {
-      return false;
-    }
+/** Number of concurrent in-flight embedding batches. */
+function getConcurrency(): number {
+  const envValue = process.env.INDEXER_CONCURRENCY;
+  if (envValue) {
+    const count = parseInt(envValue, 10);
+    if (!isNaN(count) && count > 0) return count;
   }
-
-  db.run(
-    `UPDATE indexing_status SET
-      is_running = 1,
-      total_to_index = ?,
-      indexed_so_far = 0,
-      failed = 0,
-      started_at = datetime('now'),
-      last_updated_at = datetime('now'),
-      completed_at = NULL
-    WHERE id = 1`,
-    [total]
-  );
-  return true;
+  return 2;
 }
 
-function updateProgress(db: Database, indexed: number, failed: number): void {
-  db.run(
-    `UPDATE indexing_status SET
-      indexed_so_far = ?,
-      failed = ?,
-      last_updated_at = datetime('now')
-    WHERE id = 1`,
-    [indexed, failed]
-  );
-}
-
-function releaseLock(db: Database, indexed: number, failed: number): void {
-  db.run(
-    `UPDATE indexing_status SET
-      is_running = 0,
-      indexed_so_far = ?,
-      failed = ?,
-      last_updated_at = datetime('now'),
-      completed_at = datetime('now')
-    WHERE id = 1`,
-    [indexed, failed]
-  );
+export interface MessageRow {
+  id: number;
+  message_id: string;
+  subject: string;
+  body_text: string;
+  from_address: string;
+  date: string;
 }
 
 /**
- * Index messages that don't have embeddings yet.
- * Uses advisory lock to prevent concurrent indexing.
- * Updates progress in DB after each batch.
+ * Atomically claim a batch of pending messages.
+ */
+export function claimBatch(db: Database, size: number): MessageRow[] {
+  return db.transaction(() => {
+    const rows = db
+      .query(
+        `SELECT id, message_id, subject, body_text, from_address, date
+         FROM messages
+         WHERE embedding_state = 'pending'
+         ORDER BY date DESC
+         LIMIT ?`
+      )
+      .all(size) as MessageRow[];
+
+    if (rows.length > 0) {
+      const ids = rows.map((r) => r.id).join(",");
+      db.run(
+        `UPDATE messages SET embedding_state = 'claimed' WHERE id IN (${ids})`
+      );
+    }
+
+    return rows;
+  })();
+}
+
+export function isSyncRunning(db: Database): boolean {
+  const row = db
+    .query("SELECT is_running FROM sync_summary WHERE id = 1")
+    .get() as { is_running: number } | null;
+  return row?.is_running === 1;
+}
+
+export function resetStaleClaims(db: Database): number {
+  const row = db
+    .query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'claimed'")
+    .get() as { c: number };
+  const count = row.c;
+  if (count > 0) {
+    db.run(
+      `UPDATE messages SET embedding_state = 'pending' WHERE embedding_state = 'claimed'`
+    );
+    logger.info("Reset stale claims", { count });
+  }
+  return count;
+}
+
+/**
+ * Process a single batch: embed via OpenAI, upsert to LanceDB, update SQLite.
+ * Returns { indexed, failed } counts for this batch.
+ */
+async function processBatch(
+  db: Database,
+  batch: MessageRow[]
+): Promise<{ indexed: number; failed: number }> {
+  let indexed = 0;
+  let failed = 0;
+
+  const texts = batch.map((m) => prepareTextForEmbedding(m.subject, m.body_text));
+
+  try {
+    const embeddings = await embedBatch(texts);
+
+    for (let i = 0; i < batch.length; i++) {
+      try {
+        await upsertEmbedding(
+          batch[i].message_id,
+          embeddings[i],
+          batch[i].subject,
+          batch[i].from_address,
+          batch[i].date
+        );
+        db.run(
+          `UPDATE messages SET embedding_state = 'done' WHERE message_id = ?`,
+          [batch[i].message_id]
+        );
+        indexed++;
+      } catch (err) {
+        logger.warn("Failed to upsert embedding", {
+          messageId: batch[i].message_id,
+          error: String(err),
+        });
+        db.run(
+          `UPDATE messages SET embedding_state = 'failed' WHERE message_id = ?`,
+          [batch[i].message_id]
+        );
+        failed++;
+      }
+    }
+  } catch (err) {
+    logger.error("Embedding batch failed", { error: String(err) });
+    for (const msg of batch) {
+      db.run(
+        `UPDATE messages SET embedding_state = 'failed' WHERE message_id = ?`,
+        [msg.message_id]
+      );
+      failed++;
+    }
+  }
+
+  return { indexed, failed };
+}
+
+/**
+ * Index messages with async-pipelined concurrency.
+ * Claims batches serially (fast, single-writer), but runs N embedding API calls
+ * in parallel. This saturates the OpenAI rate limit without any thread contention.
  */
 export async function indexMessages(): Promise<IndexingResult> {
   if (!config.openai.apiKey) {
+    logger.warn("OPENAI_API_KEY not set, skipping indexing");
     return { indexed: 0, skipped: 0, failed: 0, durationMs: 0, messagesPerMinute: 0 };
   }
 
   const startTime = Date.now();
   const db = getDb();
-  const embeddedIds = await getAllEmbeddedMessageIds();
 
-  type MessageRow = {
-    message_id: string;
-    subject: string;
-    body_text: string;
-    from_address: string;
-    date: string;
-  };
-
-  let toIndex: MessageRow[];
-
-  if (embeddedIds.size === 0) {
-    toIndex = db
-      .query(
-        `SELECT message_id, subject, body_text, from_address, date
-         FROM messages ORDER BY date DESC`
-      )
-      .all() as MessageRow[];
-  } else {
-    const placeholders = Array(embeddedIds.size).fill("?").join(",");
-    toIndex = db
-      .query(
-        `SELECT message_id, subject, body_text, from_address, date
-         FROM messages
-         WHERE message_id NOT IN (${placeholders})
-         ORDER BY date DESC`
-      )
-      .all(...Array.from(embeddedIds)) as MessageRow[];
-  }
-
-  if (toIndex.length === 0) {
-    logger.info("All messages already indexed");
+  const lockResult = acquireLock(db, "indexing_status", process.pid);
+  if (!lockResult.acquired) {
+    logger.info("Indexing already running, skipping");
     return { indexed: 0, skipped: 0, failed: 0, durationMs: Date.now() - startTime, messagesPerMinute: 0 };
   }
 
-  // Try to acquire lock
-  if (!acquireLock(db, toIndex.length)) {
-    logger.info("Indexing already in progress, skipping");
-    return { indexed: 0, skipped: toIndex.length, failed: 0, durationMs: Date.now() - startTime, messagesPerMinute: 0 };
+  if (lockResult.takenOver) {
+    logger.info("Recovered from crashed indexing, resetting stale claims");
   }
 
-  logger.info("Indexing started", { total: toIndex.length });
+  resetStaleClaims(db);
 
-  let indexed = 0;
-  let failed = 0;
+  db.run(
+    `UPDATE indexing_status SET
+      total_to_index = (SELECT COUNT(*) FROM messages WHERE embedding_state = 'pending'),
+      indexed_so_far = 0,
+      failed = 0,
+      started_at = datetime('now'),
+      completed_at = NULL
+    WHERE id = 1`
+  );
 
-  try {
-    for (let i = 0; i < toIndex.length; i += BATCH_SIZE) {
-      const batch = toIndex.slice(i, i + BATCH_SIZE);
-      const texts = batch.map((m) => prepareTextForEmbedding(m.subject, m.body_text));
+  const concurrency = getConcurrency();
+  logger.info("Indexing started", { concurrency });
 
-      try {
-        const embeddings = await embedBatch(texts);
-        for (let j = 0; j < batch.length; j++) {
-          try {
-            await upsertEmbedding(
-              batch[j].message_id,
-              embeddings[j],
-              batch[j].subject,
-              batch[j].from_address,
-              batch[j].date
-            );
-            indexed++;
-          } catch (err) {
-            logger.warn("Failed to upsert embedding", {
-              messageId: batch[j].message_id,
-              error: String(err),
-            });
-            failed++;
-          }
+  let totalIndexed = 0;
+  let totalFailed = 0;
+
+  // Pool of in-flight batch promises
+  const inFlight: Set<Promise<void>> = new Set();
+
+  let emptyPolls = 0;
+  let done = false;
+
+  while (!done) {
+    // Fill up to concurrency limit with in-flight batches
+    while (inFlight.size < concurrency) {
+      const batch = claimBatch(db, BATCH_SIZE);
+
+      if (batch.length === 0) {
+        if (isSyncRunning(db)) {
+          // Sync still running — break inner loop and wait below
+          break;
         }
-      } catch (err) {
-        logger.error("Embedding batch failed", {
-          batchStart: i + 1,
-          error: String(err),
-        });
-        failed += batch.length;
+        // Sync done and queue empty — we're done after in-flight batches finish
+        done = true;
+        break;
       }
 
-      // Update progress in DB after each batch
-      updateProgress(db, indexed, failed);
+      emptyPolls = 0;
 
-      // Periodic stdout progress
-      if ((i + BATCH_SIZE) % 500 === 0 || i + BATCH_SIZE >= toIndex.length) {
-        const pct = Math.round(((indexed + failed) / toIndex.length) * 100);
-        logger.info("Indexing progress", {
-          indexed,
-          failed,
-          total: toIndex.length,
-          progress: `${pct}%`,
-        });
-      }
+      const batchPromise = processBatch(db, batch).then((result) => {
+        totalIndexed += result.indexed;
+        totalFailed += result.failed;
+
+        // Update progress
+        db.run(
+          `UPDATE indexing_status SET indexed_so_far = ?, failed = ? WHERE id = 1`,
+          [totalIndexed, totalFailed]
+        );
+
+        inFlight.delete(batchPromise);
+      });
+
+      inFlight.add(batchPromise);
     }
-  } finally {
-    releaseLock(db, indexed, failed);
+
+    if (inFlight.size > 0) {
+      // Wait for at least one batch to complete before claiming more
+      await Promise.race(inFlight);
+    } else if (!done) {
+      // No in-flight work and sync still running — poll
+      emptyPolls++;
+      const delay = Math.min(500 * emptyPolls, 2000);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+
+    if ((totalIndexed + totalFailed) % 500 === 0 && totalIndexed + totalFailed > 0) {
+      logger.info("Indexing progress", {
+        indexed: totalIndexed,
+        failed: totalFailed,
+      });
+    }
   }
+
+  // Wait for remaining in-flight batches
+  if (inFlight.size > 0) {
+    await Promise.all(inFlight);
+  }
+
+  // Final status update
+  db.run(
+    `UPDATE indexing_status SET
+      indexed_so_far = ?,
+      failed = ?,
+      completed_at = datetime('now')
+    WHERE id = 1`,
+    [totalIndexed, totalFailed]
+  );
+
+  releaseLock(db, "indexing_status");
 
   const durationMs = Date.now() - startTime;
-  const messagesPerMinute = durationMs > 0 ? Math.round((indexed / durationMs) * 60000) : 0;
+  const messagesPerMinute =
+    durationMs > 0 ? Math.round((totalIndexed / durationMs) * 60000) : 0;
+
   logger.info("Indexing complete", {
-    indexed,
-    failed,
+    indexed: totalIndexed,
+    failed: totalFailed,
     durationMs,
     messagesPerMinute,
   });
 
   return {
-    indexed,
-    skipped: toIndex.length - indexed - failed,
-    failed,
+    indexed: totalIndexed,
+    skipped: 0,
+    failed: totalFailed,
     durationMs,
     messagesPerMinute,
   };

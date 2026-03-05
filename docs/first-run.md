@@ -36,7 +36,7 @@ This doc records the first run (stub), the first successful sync, and fixes appl
 
 - **What:** Sync reports “Sync complete” without fetching any mail.
 - **Why:** `src/sync/index.ts` has no IMAP logic; `src/sync/providers.ts` has only TODO shells.
-- **Improvement:** Implement minimal IMAP sync: connect with imapflow, fetch messages since `SYNC_FROM_DATE` from INBOX (or All Mail), write .eml to maildir and metadata to SQLite so search returns results.
+- **Improvement:** Implement minimal IMAP sync: connect with imapflow, fetch messages since a date (CLI `--since 7d` etc. or `DEFAULT_SYNC_SINCE` env var) from INBOX (or All Mail), write .eml to maildir and metadata to SQLite so search returns results.
 
 ### 2. No IMAP config validation on sync
 
@@ -78,8 +78,8 @@ This doc records the first run (stub), the first successful sync, and fixes appl
 Minimal IMAP sync was implemented and run:
 
 - **Config:** `requireImapConfig()` at start; fail if `IMAP_USER` or `IMAP_PASSWORD` missing.
-- **Flow:** Connect (imapflow), open INBOX, `search({ since: SYNC_FROM_DATE })`, `fetchAll` in batches of 50 with `source: true`, write raw to `data/maildir/cur/<uid>_<safe>.eml`, parse with mailparser, insert into `messages` + `threads`, update `sync_state` and `sync_summary`.
-- **Result:** 94 messages synced (SYNC_FROM_DATE=2026-03-01), ~5.7s. Search returns real results (e.g. `zmail search "Golf"`).
+- **Flow:** Connect (imapflow), open INBOX, `search({ since: <date> })` (date from CLI `--since 7d` etc. or `DEFAULT_SYNC_SINCE` env var, default 1y), `fetchAll` in batches of 50 with `source: true`, write raw to `data/maildir/cur/<uid>_<safe>.eml`, parse with mailparser, insert into `messages` + `threads`, update `sync_state` and `sync_summary`.
+- **Result:** 94 messages synced (e.g. `zmail sync --since 5d`), ~5.7s. Search returns real results (e.g. `zmail search "Golf"`).
 
 **Remaining opportunities (from original list):**
 

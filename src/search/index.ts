@@ -4,7 +4,7 @@ import { embedText } from "./embeddings";
 import { searchVectors } from "./vectors";
 
 export interface SearchOptions {
-  query: string;
+  query?: string;
   limit?: number;
   offset?: number;
   fromAddress?: string;
@@ -17,54 +17,59 @@ function fromFilterPattern(value: string): string {
   return `%${value}%`;
 }
 
-export function search(db: Database, opts: SearchOptions): SearchResult[] {
-  const { query, limit = 20, offset = 0, fromAddress, afterDate, beforeDate } = opts;
-  const hasFilters = !!(fromAddress || afterDate || beforeDate);
+/**
+ * Filter-only search (no query text, just WHERE clauses).
+ */
+function filterOnlySearch(db: Database, opts: SearchOptions): SearchResult[] {
+  const { limit = 20, offset = 0, fromAddress, afterDate, beforeDate } = opts;
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
 
-  // Filter-only path: no FTS when query is empty but filters are present
-  if (!query?.trim() && hasFilters) {
-    const conditions: string[] = [];
-    const params: (string | number)[] = [];
-
-    if (fromAddress) {
-      const pattern = fromFilterPattern(fromAddress);
-      conditions.push("(m.from_address LIKE ? OR m.from_name LIKE ?)");
-      params.push(pattern, pattern);
-    }
-    if (afterDate) {
-      conditions.push("m.date >= ?");
-      params.push(afterDate);
-    }
-    if (beforeDate) {
-      conditions.push("m.date <= ?");
-      params.push(beforeDate);
-    }
-
-    params.push(limit, offset);
-    const where = `WHERE ${conditions.join(" AND ")}`;
-    const rows = db
-      .query(
-        /* sql */ `
-        SELECT
-          m.message_id   AS messageId,
-          m.thread_id    AS threadId,
-          m.from_address AS fromAddress,
-          m.from_name    AS fromName,
-          m.subject,
-          m.date,
-          COALESCE(TRIM(SUBSTR(m.body_text, 1, 200)), '') || (CASE WHEN LENGTH(m.body_text) > 200 THEN '…' ELSE '' END) AS snippet,
-          0 AS rank
-        FROM messages m
-        ${where}
-        ORDER BY m.date DESC
-        LIMIT ? OFFSET ?
-      `
-      )
-      .all(...params) as SearchResult[];
-    return rows;
+  if (fromAddress) {
+    const pattern = fromFilterPattern(fromAddress);
+    conditions.push("(m.from_address LIKE ? OR m.from_name LIKE ?)");
+    params.push(pattern, pattern);
+  }
+  if (afterDate) {
+    conditions.push("m.date >= ?");
+    params.push(afterDate);
+  }
+  if (beforeDate) {
+    conditions.push("m.date <= ?");
+    params.push(beforeDate);
   }
 
-  // FTS path
+  params.push(limit, offset);
+  const where = `WHERE ${conditions.join(" AND ")}`;
+  const rows = db
+    .query(
+      /* sql */ `
+      SELECT
+        m.message_id   AS messageId,
+        m.thread_id    AS threadId,
+        m.from_address AS fromAddress,
+        m.from_name    AS fromName,
+        m.subject,
+        m.date,
+        COALESCE(TRIM(SUBSTR(m.body_text, 1, 200)), '') || (CASE WHEN LENGTH(m.body_text) > 200 THEN '…' ELSE '' END) AS snippet,
+        0 AS rank
+      FROM messages m
+      ${where}
+      ORDER BY m.date DESC
+      LIMIT ? OFFSET ?
+    `
+    )
+    .all(...params) as SearchResult[];
+  return rows;
+}
+
+/**
+ * FTS5 search (keyword matching via BM25).
+ */
+function ftsSearch(db: Database, opts: SearchOptions): SearchResult[] {
+  const { query, limit = 20, offset = 0, fromAddress, afterDate, beforeDate } = opts;
+  if (!query?.trim()) return [];
+
   const conditions: string[] = ["messages_fts MATCH ?"];
   const params: (string | number)[] = [query];
 
@@ -73,18 +78,16 @@ export function search(db: Database, opts: SearchOptions): SearchResult[] {
     conditions.push("(m.from_address LIKE ? OR m.from_name LIKE ?)");
     params.push(pattern, pattern);
   }
-
   if (afterDate) {
     conditions.push("m.date >= ?");
     params.push(afterDate);
   }
-
   if (beforeDate) {
     conditions.push("m.date <= ?");
     params.push(beforeDate);
   }
 
-  params.push(limit, offset);
+  params.push(limit + offset + 50);
 
   const rows = db
     .query(
@@ -102,20 +105,37 @@ export function search(db: Database, opts: SearchOptions): SearchResult[] {
       JOIN messages m ON m.id = messages_fts.rowid
       WHERE ${conditions.join(" AND ")}
       ORDER BY rank
-      LIMIT ? OFFSET ?
+      LIMIT ?
     `
     )
     .all(...params) as SearchResult[];
 
-  return rows;
+  // Apply filters and limit/offset
+  let filtered = rows;
+  if (fromAddress || afterDate || beforeDate) {
+    filtered = rows.filter((r) => {
+      if (fromAddress) {
+        const pattern = fromAddress.toLowerCase();
+        const fromMatch =
+          r.fromAddress.toLowerCase().includes(pattern) ||
+          (r.fromName && r.fromName.toLowerCase().includes(pattern));
+        if (!fromMatch) return false;
+      }
+      if (afterDate && r.date < afterDate) return false;
+      if (beforeDate && r.date > beforeDate) return false;
+      return true;
+    });
+  }
+
+  return filtered.slice(offset, offset + limit);
 }
 
 /**
- * Semantic search using vector embeddings.
- * Returns results ordered by semantic similarity to the query.
+ * Semantic/vector search.
  */
-export async function semanticSearch(db: Database, opts: SearchOptions): Promise<SearchResult[]> {
+async function vectorSearch(db: Database, opts: SearchOptions): Promise<SearchResult[]> {
   const { query, limit = 20, offset = 0, fromAddress, afterDate, beforeDate } = opts;
+  if (!query?.trim()) return [];
 
   // Embed the query
   const queryEmbedding = await embedText(query);
@@ -136,12 +156,10 @@ export async function semanticSearch(db: Database, opts: SearchOptions): Promise
     conditions.push("(m.from_address LIKE ? OR m.from_name LIKE ?)");
     params.push(pattern, pattern);
   }
-
   if (afterDate) {
     conditions.push("m.date >= ?");
     params.push(afterDate);
   }
-
   if (beforeDate) {
     conditions.push("m.date <= ?");
     params.push(beforeDate);
@@ -179,54 +197,6 @@ export async function semanticSearch(db: Database, opts: SearchOptions): Promise
     .slice(offset, offset + limit);
 
   return sorted.map(({ bodyText, ...rest }) => rest);
-}
-
-/**
- * Hybrid search: combines FTS5 and semantic search using reciprocal rank fusion (RRF).
- * Runs both searches in parallel and merges results.
- */
-export async function hybridSearch(db: Database, opts: SearchOptions): Promise<SearchResult[]> {
-  const { limit = 20, offset = 0 } = opts;
-
-  // Run both searches in parallel
-  const [ftsResults, semanticResults] = await Promise.all([
-    Promise.resolve(search(db, opts)), // FTS is synchronous
-    semanticSearch(db, opts),
-  ]);
-
-  // Create maps for RRF scoring
-  const ftsRankMap = new Map(ftsResults.map((r, idx) => [r.messageId, idx + 1]));
-  const semanticRankMap = new Map(semanticResults.map((r, idx) => [r.messageId, idx + 1]));
-
-  // Combine and deduplicate by messageId
-  const combined = new Map<string, SearchResult & { rrfScore: number }>();
-
-  // Add FTS results
-  for (const result of ftsResults) {
-    const rrfScore = 1 / (60 + (ftsRankMap.get(result.messageId) ?? 1000));
-    combined.set(result.messageId, { ...result, rrfScore });
-  }
-
-  // Add semantic results, merging with existing
-  for (const result of semanticResults) {
-    const existing = combined.get(result.messageId);
-    if (existing) {
-      // Merge: keep FTS snippet (better for keyword matches), combine RRF scores
-      const semanticRrf = 1 / (60 + (semanticRankMap.get(result.messageId) ?? 1000));
-      existing.rrfScore += semanticRrf;
-    } else {
-      const semanticRrf = 1 / (60 + (semanticRankMap.get(result.messageId) ?? 1000));
-      combined.set(result.messageId, { ...result, rrfScore: semanticRrf });
-    }
-  }
-
-  // Sort by RRF score and apply limit/offset
-  const sorted = Array.from(combined.values())
-    .sort((a, b) => b.rrfScore - a.rrfScore)
-    .slice(offset, offset + limit);
-
-  // Remove rrfScore from final results
-  return sorted.map(({ rrfScore, ...rest }) => rest);
 }
 
 /**
@@ -275,4 +245,72 @@ function generateSnippet(text: string, query: string, contextLength: number = 10
   if (end < text.length) snippet = snippet + "…";
 
   return snippet;
+}
+
+/**
+ * Unified search function that always uses hybrid mode (FTS5 + semantic RRF).
+ * For filter-only queries (no query text), returns plain SQL results.
+ */
+export async function search(db: Database, opts: SearchOptions): Promise<SearchResult[]> {
+  const { query, limit = 20, offset = 0 } = opts;
+  const hasFilters = !!(opts.fromAddress || opts.afterDate || opts.beforeDate);
+
+  // Filter-only path: no query text, just WHERE clauses
+  if (!query?.trim() && hasFilters) {
+    return filterOnlySearch(db, opts);
+  }
+
+  // If no query and no filters, return empty
+  if (!query?.trim()) {
+    return [];
+  }
+
+  // Always hybrid: FTS + semantic, merged via RRF
+  const [ftsResults, semanticResults] = await Promise.all([
+    Promise.resolve(ftsSearch(db, opts)), // FTS is synchronous
+    vectorSearch(db, opts),
+  ]);
+
+  // Create maps for RRF scoring
+  const ftsRankMap = new Map(ftsResults.map((r, idx) => [r.messageId, idx + 1]));
+  const semanticRankMap = new Map(semanticResults.map((r, idx) => [r.messageId, idx + 1]));
+
+  // Combine and deduplicate by messageId
+  const combined = new Map<string, SearchResult & { rrfScore: number }>();
+
+  // Add FTS results
+  for (const result of ftsResults) {
+    const rrfScore = 1 / (60 + (ftsRankMap.get(result.messageId) ?? 1000));
+    combined.set(result.messageId, { ...result, rrfScore });
+  }
+
+  // Add semantic results, merging with existing
+  for (const result of semanticResults) {
+    const existing = combined.get(result.messageId);
+    if (existing) {
+      // Merge: keep FTS snippet (better for keyword matches), combine RRF scores
+      const semanticRrf = 1 / (60 + (semanticRankMap.get(result.messageId) ?? 1000));
+      existing.rrfScore += semanticRrf;
+    } else {
+      const semanticRrf = 1 / (60 + (semanticRankMap.get(result.messageId) ?? 1000));
+      combined.set(result.messageId, { ...result, rrfScore: semanticRrf });
+    }
+  }
+
+  // Sort by RRF score and apply limit/offset
+  const sorted = Array.from(combined.values())
+    .sort((a, b) => b.rrfScore - a.rrfScore)
+    .slice(offset, offset + limit);
+
+  // Remove rrfScore from final results
+  return sorted.map(({ rrfScore, ...rest }) => rest);
+}
+
+// Legacy exports for backwards compatibility (deprecated, will be removed)
+export async function semanticSearch(db: Database, opts: SearchOptions): Promise<SearchResult[]> {
+  return vectorSearch(db, opts);
+}
+
+export async function hybridSearch(db: Database, opts: SearchOptions): Promise<SearchResult[]> {
+  return search(db, opts);
 }

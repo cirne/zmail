@@ -16,6 +16,8 @@ export function getDb(): Database {
   _db.run("PRAGMA journal_mode = WAL");
   _db.run("PRAGMA foreign_keys = ON");
   _db.run("PRAGMA synchronous = NORMAL");
+  // Allow wait up to 15s for lock (workers and sync share the DB; avoids "database is locked")
+  _db.run("PRAGMA busy_timeout = 15000");
 
   _db.run(SCHEMA);
 

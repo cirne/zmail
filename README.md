@@ -35,14 +35,7 @@ zmail attachments read att_291   # returns PDF content as markdown
    ```
    Leave `IMAP_HOST=imap.gmail.com` and `IMAP_PORT=993` as in `.env.example`.
 
-3. **Sync only the last day (when sync exists)**  
-   Set the sync window start to yesterday so only recent mail is fetched:
-   ```bash
-   SYNC_FROM_DATE=2025-03-03   # use yesterday’s date
-   ```
-   Default is 1 year back; see [`.env.example`](.env.example).
-
-4. **Run**
+3. **Run**
    ```bash
    bun run dev      # web UI at http://localhost:3000 + background sync (stub)
    # or

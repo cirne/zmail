@@ -4,6 +4,7 @@ import { ImapFlow } from "imapflow";
 import { config, requireImapConfig } from "~/lib/config";
 import { getDb } from "~/db";
 import { logger } from "~/lib/logger";
+import { acquireLock, releaseLock } from "~/lib/process-lock";
 import { parseRawMessage } from "./parse-message";
 import { parseSinceToDate } from "./parse-since";
 
@@ -13,7 +14,7 @@ function getSyncMailbox(host: string): string {
 }
 
 export interface SyncOptions {
-  /** Relative since spec (e.g. 7d, 5w, 3m, 2y). Overrides SYNC_FROM_DATE when set. */
+  /** Relative since spec (e.g. 7d, 5w, 3m, 2y). Overrides DEFAULT_SYNC_SINCE env var when set. */
   since?: string;
 }
 
@@ -71,7 +72,8 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
     throw new Error("IMAP_USER and IMAP_PASSWORD are required for sync. Set them in .env");
   }
 
-  const fromDate = options?.since ? parseSinceToDate(options.since) : config.sync.fromDate;
+  const sinceSpec = options?.since ?? config.sync.defaultSince;
+  const fromDate = parseSinceToDate(sinceSpec);
   logger.info("Sync starting", { user: imap.user, fromDate });
 
   ensureMaildir();
@@ -79,10 +81,28 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
 
   const sinceDate = new Date(fromDate + "T00:00:00Z");
   if (isNaN(sinceDate.getTime())) {
-    throw new Error(`Invalid from date: ${fromDate}. Use YYYY-MM-DD or --since 7d.`);
+    throw new Error(`Invalid from date: ${fromDate}. Use --since 7d, 5w, 3m, 2y or set DEFAULT_SYNC_SINCE env var.`);
   }
 
-  db.run("UPDATE sync_summary SET is_running = 1 WHERE id = 1");
+  // Acquire lock with PID-based ownership
+  const lockResult = acquireLock(db, "sync_summary", process.pid);
+  if (!lockResult.acquired) {
+    logger.info("Sync already running, exiting");
+    const durationMs = Date.now() - startTime;
+    return {
+      synced: 0,
+      messagesFetched: 0,
+      bytesDownloaded: 0,
+      durationMs,
+      bandwidthBytesPerSec: 0,
+      messagesPerMinute: 0,
+    };
+  }
+  if (lockResult.takenOver) {
+    // Partial work is safe: sync_state.last_uid is correct,
+    // and message dedup prevents re-inserts
+    logger.info("Recovered from crashed sync, resuming from last checkpoint");
+  }
 
   const client = new ImapFlow({
     host: imap.host,
@@ -120,7 +140,8 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
       }
 
       if (uids.length === 0) {
-        db.run("UPDATE sync_summary SET is_running = 0, last_sync_at = datetime('now') WHERE id = 1");
+        db.run("UPDATE sync_summary SET last_sync_at = datetime('now') WHERE id = 1");
+        releaseLock(db, "sync_summary");
         const durationMs = Date.now() - startTime;
         const result: SyncResult = {
           synced: 0,
@@ -186,8 +207,8 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
           db.run(
             `INSERT INTO messages (
               message_id, thread_id, folder, uid, labels, from_address, from_name,
-              to_addresses, cc_addresses, subject, date, body_text, raw_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              to_addresses, cc_addresses, subject, date, body_text, raw_path, embedding_state
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
             [
               parsed.messageId,
               threadId,
@@ -235,11 +256,11 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
           earliest_synced_date = COALESCE(?, earliest_synced_date),
           latest_synced_date = COALESCE(?, latest_synced_date),
           total_messages = (SELECT COUNT(*) FROM messages),
-          last_sync_at = datetime('now'),
-          is_running = 0
+          last_sync_at = datetime('now')
          WHERE id = 1`,
         [earliestDate, latestDate]
       );
+      releaseLock(db, "sync_summary");
 
       const durationMs = Date.now() - startTime;
       const durationSec = durationMs / 1000;
@@ -258,7 +279,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
       lock.release();
     }
   } catch (err) {
-    db.run("UPDATE sync_summary SET is_running = 0 WHERE id = 1");
+    releaseLock(db, "sync_summary");
     logger.error("Sync failed", { error: String(err) });
     throw err;
   } finally {

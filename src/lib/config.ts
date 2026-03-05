@@ -10,10 +10,6 @@ function optional(key: string, fallback: string): string {
   return process.env[key] ?? fallback;
 }
 
-const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)
-  .toISOString()
-  .split("T")[0];
-
 export const config = {
   imap: {
     host: optional("IMAP_HOST", "imap.gmail.com"),
@@ -22,7 +18,8 @@ export const config = {
     password: optional("IMAP_PASSWORD", ""),
   },
   sync: {
-    fromDate: optional("SYNC_FROM_DATE", oneYearAgo),
+    /** Default sync duration spec (e.g. 7d, 5w, 3m, 2y). Overridden by CLI --since. Default: 1y. */
+    defaultSince: optional("DEFAULT_SYNC_SINCE", "1y"),
     /** Override mailbox to sync (e.g. "[Gmail]/All Mail" or "INBOX"). If unset, Gmail → All Mail, else INBOX. */
     mailbox: optional("SYNC_MAILBOX", ""),
     /** Comma-separated labels to exclude (e.g. Trash,Spam). Case-insensitive. Default: Trash,Spam. */
@@ -36,7 +33,7 @@ export const config = {
     secret: optional("AUTH_SECRET", "dev-secret-change-me"),
   },
   openai: {
-    apiKey: optional("OPENAI_API_KEY", ""),
+    apiKey: required("OPENAI_API_KEY"),
   },
   dataDir: optional("DATA_DIR", "./data"),
   port: Number(optional("PORT", "3000")),

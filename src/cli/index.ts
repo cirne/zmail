@@ -1,5 +1,5 @@
 import { runSync } from "~/sync";
-import { search, semanticSearch, hybridSearch } from "~/search";
+import { search } from "~/search";
 import { indexMessages } from "~/search/indexing";
 import { config } from "~/lib/config";
 import { getDb } from "~/db";
@@ -22,19 +22,10 @@ async function main() {
 
       // Run sync (bandwidth-bound) and indexing (API-rate-bound) concurrently (ADR-020)
       const syncPromise = runSync(since ? { since } : undefined);
+      const indexPromise = indexMessages(); // Start immediately, not after sync completes
 
-      // Start indexing concurrently if OPENAI_API_KEY is set
-      const hasApiKey = !!config.openai.apiKey;
-      const indexPromise = hasApiKey
-        ? syncPromise.then((syncResult) => {
-            if (syncResult.synced > 0 || syncResult.messagesFetched > 0) {
-              return indexMessages();
-            }
-            return { indexed: 0, skipped: 0, failed: 0, durationMs: 0, messagesPerMinute: 0 };
-          })
-        : null;
-
-      const syncResult = await syncPromise;
+      // Wait for both to complete
+      const [syncResult, indexResult] = await Promise.all([syncPromise, indexPromise]);
 
       if (syncResult) {
         const sec = (syncResult.durationMs / 1000).toFixed(2);
@@ -49,24 +40,15 @@ async function main() {
         console.log(`  duration:  ${sec}s`);
       }
 
-      // Wait for indexing to complete
-      if (indexPromise) {
-        try {
-          const indexResult = await indexPromise;
-          if (indexResult.indexed > 0 || indexResult.failed > 0) {
-            const sec = (indexResult.durationMs / 1000).toFixed(2);
-            console.log("");
-            console.log("Indexing metrics:");
-            console.log(`  indexed:    ${indexResult.indexed}`);
-            if (indexResult.skipped > 0) console.log(`  skipped:    ${indexResult.skipped}`);
-            if (indexResult.failed > 0) console.log(`  failed:     ${indexResult.failed}`);
-            console.log(`  throughput: ${indexResult.messagesPerMinute} msg/min`);
-            console.log(`  duration:   ${sec}s`);
-          }
-        } catch (err) {
-          logger.error("Indexing failed", { error: String(err) });
-          console.error(`Indexing error: ${err instanceof Error ? err.message : String(err)}`);
-        }
+      if (indexResult.indexed > 0 || indexResult.failed > 0) {
+        const sec = (indexResult.durationMs / 1000).toFixed(2);
+        console.log("");
+        console.log("Indexing metrics:");
+        console.log(`  indexed:    ${indexResult.indexed}`);
+        if (indexResult.skipped > 0) console.log(`  skipped:    ${indexResult.skipped}`);
+        if (indexResult.failed > 0) console.log(`  failed:     ${indexResult.failed}`);
+        console.log(`  throughput: ${indexResult.messagesPerMinute} msg/min`);
+        console.log(`  duration:   ${sec}s`);
       }
       break;
     }
@@ -78,8 +60,6 @@ async function main() {
       const beforeIdx = args.indexOf("--before");
       const limitIdx = args.indexOf("--limit");
       const jsonIdx = args.indexOf("--json");
-      const semanticIdx = args.indexOf("--semantic");
-      const hybridIdx = args.indexOf("--hybrid");
 
       const fromAddress = fromIdx >= 0 ? args[fromIdx + 1] : undefined;
       const afterRaw = afterIdx >= 0 ? args[afterIdx + 1] : undefined;
@@ -93,8 +73,6 @@ async function main() {
         console.error("  --after     filter by date (ISO YYYY-MM-DD or relative: 7d, 2w, 1m)");
         console.error("  --before    filter by date (ISO YYYY-MM-DD or relative: 7d, 2w, 1m)");
         console.error("  --limit     max results (default: 20)");
-        console.error("  --semantic  use semantic/vector search (requires OPENAI_API_KEY)");
-        console.error("  --hybrid    use hybrid search: FTS + semantic (requires OPENAI_API_KEY)");
         console.error("  --json      force JSON output (default: table for TTY, JSON when piped)");
         process.exit(1);
       }
@@ -172,10 +150,6 @@ async function main() {
         flagIndices.add(jsonIdx);
       }
 
-      // Remove semantic/hybrid from flag indices so they don't get included in query
-      if (semanticIdx >= 0) flagIndices.add(semanticIdx);
-      if (hybridIdx >= 0) flagIndices.add(hybridIdx);
-
       const queryParts = args.filter((_, idx) => !flagIndices.has(idx));
       const query = queryParts.join(" ").trim();
 
@@ -186,44 +160,14 @@ async function main() {
         process.exit(1);
       }
 
-      // Determine search mode
-      const mode = hybridIdx >= 0 ? "hybrid" : semanticIdx >= 0 ? "semantic" : "fts";
-      if ((semanticIdx >= 0 || hybridIdx >= 0) && !process.env.OPENAI_API_KEY) {
-        console.error("Error: --semantic and --hybrid require OPENAI_API_KEY to be set in .env");
-        process.exit(1);
-      }
-      if (mode !== "fts" && !query) {
-        console.error("Semantic and hybrid search require a query. Omit --semantic/--hybrid for filter-only search.");
-        process.exit(1);
-      }
-
       const db = getDb();
-      let results: Awaited<ReturnType<typeof search>>;
-      if (mode === "hybrid") {
-        results = await hybridSearch(db, {
-          query,
-          fromAddress,
-          afterDate,
-          beforeDate,
-          limit,
-        });
-      } else if (mode === "semantic") {
-        results = await semanticSearch(db, {
-          query,
-          fromAddress,
-          afterDate,
-          beforeDate,
-          limit,
-        });
-      } else {
-        results = search(db, {
-          query,
-          fromAddress,
-          afterDate,
-          beforeDate,
-          limit,
-        });
-      }
+      const results = await search(db, {
+        query,
+        fromAddress,
+        afterDate,
+        beforeDate,
+        limit,
+      });
 
       // Output format: table for TTY, JSON when piped (unless --json is set)
       const isTty = process.stdout.isTTY;

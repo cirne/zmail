@@ -20,17 +20,14 @@ describe("config", () => {
       expect(config.port).toBe(3000);
     });
 
-    it("defaults SYNC_FROM_DATE to approximately one year ago when env unset", () => {
-      const fromDate = new Date(config.sync.fromDate);
-      expect(fromDate.getTime()).not.toBeNaN();
-      if (process.env.SYNC_FROM_DATE !== undefined) {
-        // .env sets it; just ensure it's a valid date
-        expect(fromDate.getTime()).toBeLessThanOrEqual(Date.now());
+    it("defaults DEFAULT_SYNC_SINCE to 1y when env unset", () => {
+      if (process.env.DEFAULT_SYNC_SINCE !== undefined) {
+        // .env sets it; just ensure it's a valid duration spec
+        expect(config.sync.defaultSince).toBeTruthy();
+        expect(config.sync.defaultSince).toMatch(/^\d+[dwmy]$/i);
         return;
       }
-      const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
-      const diff = Math.abs(fromDate.getTime() - oneYearAgo.getTime());
-      expect(diff).toBeLessThan(24 * 60 * 60 * 1000);
+      expect(config.sync.defaultSince).toBe("1y");
     });
   });
 
