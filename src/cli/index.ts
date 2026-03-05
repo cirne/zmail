@@ -1,8 +1,10 @@
 import { runSync } from "~/sync";
 import { searchWithMeta, type SearchMode } from "~/search";
+import { who } from "~/search/who";
 import { indexMessages } from "~/search/indexing";
 import { getDb } from "~/db";
 import { startMcpServer } from "~/mcp";
+import { config } from "~/lib/config";
 import { logger } from "~/lib/logger";
 import { parseSinceToDate } from "~/sync/parse-since";
 import type { SearchResult } from "~/lib/types";
@@ -73,6 +75,91 @@ function searchUsage() {
   console.error("  --ids-only         return only message IDs");
   console.error("  --timings          include machine-readable search timings");
   console.error("  --json             force JSON output (default: table for TTY, JSON when piped)");
+}
+
+interface ParsedWhoArgs {
+  query: string;
+  limit?: number;
+  minSent?: number;
+  minReceived?: number;
+  forceJson: boolean;
+}
+
+function whoUsage() {
+  console.error("Usage: zmail who <query> [flags]");
+  console.error("  --json             output JSON (default: table for TTY, JSON when piped)");
+  console.error("  --limit <n>        max results (default: 50)");
+  console.error("  --min-sent <n>     minimum sent count");
+  console.error("  --min-received <n> minimum received count");
+}
+
+function parseWhoArgs(rawArgs: string[]): ParsedWhoArgs {
+  const parsed: ParsedWhoArgs = {
+    query: "",
+    forceJson: false,
+  };
+
+  const queryParts: string[] = [];
+
+  for (let i = 0; i < rawArgs.length; i++) {
+    const arg = rawArgs[i];
+    const next = rawArgs[i + 1];
+    const readValue = (flag: string): string => {
+      if (!next || next.startsWith("-")) {
+        throw new Error(`Missing value for ${flag}`);
+      }
+      i++;
+      return next;
+    };
+
+    if (arg === "--help") {
+      whoUsage();
+      process.exit(0);
+    }
+    if (arg === "--json") {
+      parsed.forceJson = true;
+      continue;
+    }
+    if (arg === "--limit") {
+      const rawLimit = readValue(arg);
+      const limit = Number.parseInt(rawLimit, 10);
+      if (!Number.isFinite(limit) || limit <= 0) {
+        throw new Error(`Invalid --limit: "${rawLimit}". Must be a positive number.`);
+      }
+      parsed.limit = limit;
+      continue;
+    }
+    if (arg === "--min-sent") {
+      const raw = readValue(arg);
+      const n = Number.parseInt(raw, 10);
+      if (!Number.isFinite(n) || n < 0) {
+        throw new Error(`Invalid --min-sent: "${raw}". Must be a non-negative number.`);
+      }
+      parsed.minSent = n;
+      continue;
+    }
+    if (arg === "--min-received") {
+      const raw = readValue(arg);
+      const n = Number.parseInt(raw, 10);
+      if (!Number.isFinite(n) || n < 0) {
+        throw new Error(`Invalid --min-received: "${raw}". Must be a non-negative number.`);
+      }
+      parsed.minReceived = n;
+      continue;
+    }
+
+    if (arg.startsWith("-")) {
+      throw new Error(`Unknown flag: ${arg}`);
+    }
+    queryParts.push(arg);
+  }
+
+  parsed.query = queryParts.join(" ").trim();
+  if (!parsed.query) {
+    throw new Error("Provide a query (e.g. zmail who tom).");
+  }
+
+  return parsed;
 }
 
 function parseDateFlag(raw: string, flagName: "--after" | "--before"): string {
@@ -413,6 +500,50 @@ async function main() {
       break;
     }
 
+    case "who": {
+      let whoParsed: ParsedWhoArgs;
+      try {
+        whoParsed = parseWhoArgs(args);
+      } catch (err) {
+        whoUsage();
+        console.error(err instanceof Error ? `\n${err.message}` : String(err));
+        process.exit(1);
+      }
+
+      const isTty = process.stdout.isTTY;
+      const shouldOutputJson = whoParsed.forceJson || !isTty;
+
+      const db = getDb();
+      const ownerAddress = config.imap.user?.trim() || undefined;
+      const result = who(db, {
+        query: whoParsed.query,
+        limit: whoParsed.limit,
+        minSent: whoParsed.minSent,
+        minReceived: whoParsed.minReceived,
+        ownerAddress,
+      });
+
+      if (shouldOutputJson) {
+        console.log(JSON.stringify(result, null, 2));
+        break;
+      }
+
+      if (result.people.length === 0) {
+        console.log("No matching people found.");
+        break;
+      }
+
+      console.log(`People matching "${result.query}":\n`);
+      console.log("  ADDRESS".padEnd(44) + "  DISPLAY NAME".padEnd(24) + "  SENT   RECV   MENTIONED");
+      console.log("  " + "-".repeat(90));
+      for (const p of result.people) {
+        const addr = p.address.length > 42 ? p.address.slice(0, 39) + "..." : p.address.padEnd(42);
+        const name = (p.displayName ?? "").length > 22 ? (p.displayName ?? "").slice(0, 19) + "..." : (p.displayName ?? "").padEnd(22);
+        console.log(`  ${addr}  ${name}  ${String(p.sentCount).padStart(5)}  ${String(p.receivedCount).padStart(5)}  ${String(p.mentionedCount).padStart(5)}`);
+      }
+      break;
+    }
+
     case "thread": {
       const threadId = args[0];
       if (!threadId) {
@@ -530,6 +661,7 @@ async function main() {
 Usage:
   zmail sync [--since <spec>]     Sync email + index embeddings (e.g. --since 7d, 5w, 3m, 2y)
   zmail search <query> [flags]    Search email (see --help for flags)
+  zmail who <query> [flags]      Find people by address or name (see --help for flags)
   zmail status                    Show sync and indexing status
   zmail stats                     Show database statistics
   zmail thread <id>               Fetch full thread (returns JSON)

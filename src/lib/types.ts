@@ -77,3 +77,18 @@ export interface SearchResult {
   snippet: string;
   rank: number;
 }
+
+/** One identity from `zmail who`: address + best-known display name and counts. */
+export interface WhoPerson {
+  address: string;
+  displayName: string | null;
+  sentCount: number;
+  receivedCount: number;
+  mentionedCount: number;
+}
+
+/** Result of who(db, { query, ... }). */
+export interface WhoResult {
+  query: string;
+  people: WhoPerson[];
+}

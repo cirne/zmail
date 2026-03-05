@@ -48,6 +48,11 @@ export const config = {
   get vectorsPath() {
     return join(this.dataDir, "vectors");
   },
+  /** Path for embedding response cache. Empty if EMBEDDING_CACHE=0. */
+  get embeddingCachePath(): string {
+    if (process.env.EMBEDDING_CACHE === "0") return "";
+    return process.env.EMBEDDING_CACHE_PATH ?? join(this.dataDir, "embedding-cache");
+  },
 } as const;
 
 export function requireImapConfig() {

@@ -1,5 +1,10 @@
 import OpenAI from "openai";
 import { config } from "~/lib/config";
+import {
+  getCachedEmbedding,
+  setCachedEmbedding,
+  MODEL_ID,
+} from "./embedding-cache";
 
 const MAX_CHARS = 8_000; // ~5.7K tokens at worst-case 1.4 chars/token (email w/ HTML remnants, URLs)
 
@@ -28,29 +33,59 @@ function getOpenAIClient(): OpenAI {
 /**
  * Generate an embedding for a single text string.
  * Uses OpenAI text-embedding-3-small (1536 dimensions, ~$0.02/M tokens).
+ * Responses are cached on disk by (model, hash of input) when embeddingCachePath is set.
  */
 export async function embedText(text: string): Promise<number[]> {
+  const input = truncateForEmbedding(text);
+  const cacheDir = config.embeddingCachePath;
+  const cached = await getCachedEmbedding(cacheDir, MODEL_ID, input);
+  if (cached !== null) return cached;
   const client = getOpenAIClient();
   const response = await client.embeddings.create({
-    model: "text-embedding-3-small",
-    input: truncateForEmbedding(text),
+    model: MODEL_ID,
+    input,
   });
-  return response.data[0].embedding;
+  const embedding = response.data[0].embedding;
+  await setCachedEmbedding(cacheDir, MODEL_ID, input, embedding);
+  return embedding;
 }
 
 /**
  * Generate embeddings for multiple texts in a single API call.
  * Each text is truncated independently to fit the per-input token limit.
  * Batching reduces HTTP round-trips and lets OpenAI parallelize on GPU.
+ * Cache hits are served from disk; only misses are sent to the API.
  */
 export async function embedBatch(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return [];
+  const cacheDir = config.embeddingCachePath;
+  const truncated = texts.map(truncateForEmbedding);
+  const results: (number[] | null)[] = await Promise.all(
+    truncated.map((input) => getCachedEmbedding(cacheDir, MODEL_ID, input))
+  );
+  const missIndices: number[] = [];
+  for (let i = 0; i < results.length; i++) {
+    if (results[i] === null) missIndices.push(i);
+  }
+  if (missIndices.length === 0) {
+    return results as number[][];
+  }
   const client = getOpenAIClient();
+  const missTexts = missIndices.map((i) => truncated[i]);
   const response = await client.embeddings.create({
-    model: "text-embedding-3-small",
-    input: texts.map(truncateForEmbedding),
+    model: MODEL_ID,
+    input: missTexts,
   });
-  return response.data.map((d) => d.embedding);
+  const missEmbeddings = response.data.map((d) => d.embedding);
+  await Promise.all(
+    missIndices.map((idx, j) =>
+      setCachedEmbedding(cacheDir, MODEL_ID, truncated[idx], missEmbeddings[j])
+    )
+  );
+  for (let j = 0; j < missIndices.length; j++) {
+    results[missIndices[j]] = missEmbeddings[j];
+  }
+  return results as number[][];
 }
 
 /**

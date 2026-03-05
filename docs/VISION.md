@@ -16,6 +16,27 @@ Agent-First Email reimagines email as a **queryable dataset and filesystem-like 
 
 Instead of browsing inboxes, agents **query communication graphs**.
 
+**User promise:** zmail lets you **never have to look at your inbox again**. Inbox infinity instead of inbox zero — you stop fighting to empty the inbox because the system is agent-first and **lightning-fast searchable**. Your email becomes an asset again: you actually *want* everything in your email because it’s **actionable** — Zoom meeting notes, travel confirmations, automated invoices, receipts, and more, all **agent-ready** because they live in your mail. Tools like Claude Code or OpenClaw **just work** once zmail is installed: the LLM turns your natural-language prompts into the right zmail queries, fetches the data, and assembles the answer.
+
+---
+
+# “Just works” in the agent (reliably, fast)
+
+When you’re in Claude Code (or another coding agent) with zmail wired up, these kinds of prompts should **just work** — the agent uses zmail tools to fetch the right mail and then answers. The LLM’s job: map your prompt to the right zmail queries and synthesize the result.
+
+**Example user prompts:**
+
+- **“Look at all my invoices and summarize all of my spending online.”**  
+  Agent: search for invoices/receipts (e.g. from known senders or subject/body), fetch threads or attachments, extract amounts and categories, summarize.
+
+- **“Summarize my meeting notes from last week’s Zoom with Larry.”**  
+  Agent: search for Zoom emails (e.g. “Zoom” + “Larry” + last week), open the meeting summary/notes, summarize for the user.
+
+- **“When is my flight to Cabo taking off? What’s my confirmation number?”**  
+  Agent: search for Cabo/travel/booking emails, find the itinerary or confirmation, return departure time and confirmation number.
+
+In each case: **user asks in plain language → LLM issues zmail search/get-thread/get-message (and attachment) calls → LLM assembles the answer.** No inbox opening, no manual digging. Reliable and fast.
+
 ---
 
 # Core Principles

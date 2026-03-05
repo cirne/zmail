@@ -26,9 +26,10 @@ IMAP provider → raw email store → SQLite FTS5 index → MCP server
 ```
 Container
 └── /data  (persistent volume — survives redeploys)
-    ├── maildir/        ← raw .eml files
-    ├── zmail.db    ← SQLite: metadata, FTS5 index, sync state
-    └── vectors/        ← LanceDB embedded
+    ├── maildir/           ← raw .eml files
+    ├── zmail.db           ← SQLite: metadata, FTS5 index, sync state
+    ├── vectors/           ← LanceDB embedded
+    └── embedding-cache/   ← OpenAI embedding responses by (model, input hash); optional, disable with EMBEDDING_CACHE=0
 ```
 
 This layout applies to **both Phase 1 and Phase 2 (open source)**. Each user runs their own container with their own volume. There is no shared infrastructure to scale.
@@ -78,6 +79,7 @@ This layout applies to **both Phase 1 and Phase 2 (open source)**. Each user run
 ```
 zmail sync [--since <spec>]     ← sync + concurrent indexing
 zmail search <query> [flags]    ← header-first search with mode/detail controls
+zmail who <query> [flags]        ← find people by address or display name (sent/received/mentioned counts)
 zmail status                    ← sync/indexing/search readiness
 zmail stats                     ← DB stats (volume + top senders/folders)
 zmail thread <id>               ← fetch full thread JSON
@@ -90,6 +92,8 @@ zmail mcp                       ← start MCP server (stdio)
 MCP remains the right interface for remote/hosted deployments where the index lives on a server the agent can't shell into.
 
 Both modes hit the same SQLite index. The binary is the same artifact.
+
+**See also:** [OPP-004: People Index and Writable Contacts](opportunities/OPP-004-people-index-contacts.md) — roadmap for people index at index time, `zmail contact`, and MCP who/contact tools.
 
 ---
 
@@ -379,7 +383,7 @@ We do **not** introduce async job IDs or a job queue for sync unless we later ne
 **Decision:** `zmail sync` is the single user-facing command. Under the hood, it launches sync and indexing concurrently via `Promise.all` in a single thread:
 
 1. **Sync** (bandwidth-bound): IMAP fetch → write `.eml` to maildir → insert into SQLite with `embedding_state = 'pending'`. Optimized to saturate network bandwidth (ADR-016/017).
-2. **Indexing** (API-rate-bound): Claim pending messages from SQLite → generate embeddings via OpenAI → write to LanceDB → mark `embedding_state = 'done'`. Multiple embedding batches in-flight concurrently.
+2. **Indexing** (API-rate-bound): Claim pending messages from SQLite → generate embeddings via OpenAI → write to LanceDB → mark `embedding_state = 'done'`. Multiple embedding batches in-flight concurrently. Embedding API responses are cached on disk (by model and input hash) so the same string is not re-embedded. Cache lives under `DATA_DIR/embedding-cache` (or `EMBEDDING_CACHE_PATH`); set `EMBEDDING_CACHE=0` to disable.
 
 ```
 zmail sync

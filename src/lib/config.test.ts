@@ -43,5 +43,23 @@ describe("config", () => {
     it("vectorsPath is inside dataDir", () => {
       expect(config.vectorsPath).toBe(join(config.dataDir, "vectors"));
     });
+
+    it("embeddingCachePath is inside dataDir when EMBEDDING_CACHE not disabled", () => {
+      const prev = process.env.EMBEDDING_CACHE;
+      const prevPath = process.env.EMBEDDING_CACHE_PATH;
+      delete process.env.EMBEDDING_CACHE;
+      delete process.env.EMBEDDING_CACHE_PATH;
+      expect(config.embeddingCachePath).toBe(join(config.dataDir, "embedding-cache"));
+      if (prev !== undefined) process.env.EMBEDDING_CACHE = prev;
+      if (prevPath !== undefined) process.env.EMBEDDING_CACHE_PATH = prevPath;
+    });
+
+    it("embeddingCachePath is empty when EMBEDDING_CACHE=0", () => {
+      const prev = process.env.EMBEDDING_CACHE;
+      process.env.EMBEDDING_CACHE = "0";
+      expect(config.embeddingCachePath).toBe("");
+      if (prev !== undefined) process.env.EMBEDDING_CACHE = prev;
+      else delete process.env.EMBEDDING_CACHE;
+    });
   });
 });

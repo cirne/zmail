@@ -68,14 +68,28 @@ zmail search "competitor pricing changes" --mode=enriched
 
 ## 3. Contact/Entity Enrichment at Sync Time
 
-Every email has a sender domain. During sync, zmail could:
+Every email has a sender domain (and often a display name). During sync, zmail could enrich identities so `zmail who` and contact lookups return web-derived context without an extra agent round-trip. This aligns with the people/contacts work in [OPP-004: People Index and Writable Contacts](opportunities/OPP-004-people-index-contacts.md) — the extended contacts (or people/people_emails) schema is the natural place to store Exa-derived fields.
+
+**Low-hanging fruit (domain-only):**
 
 ```
-Index worker (extended):
+Enrich worker:
   → New sender domain → Exa search "what is {domain}"
-  → Store company summary, industry, description in contacts table
+  → Store company summary, industry, description (e.g. in contacts or people table)
   → Available instantly when agent asks "who is this person"
 ```
+
+No people index required: key by domain, attach to any message/sender lookup. One Exa call per new domain, amortized at sync time.
+
+**Next step (person-level enrichment):** Once we have a people index (OPP-004 Milestone 2), the enrich worker can do one Exa lookup per *identity* (e.g. first time we see a new address or above a sent_count threshold):
+
+```
+  → New or high-signal identity (e.g. sent_count ≥ 5) → Exa search "{display_name} {domain}" or "who is {email}"
+  → Store role, company, industry, one-line bio on the people/contact record
+  → zmail who / zmail contact show return "Jane Smith, VP Legal at Acme (Series C enterprise SaaS)" in one response
+```
+
+**Cost control:** Only enrich identities above a threshold (e.g. min sent_count) or on first `zmail contact show` (lazy) to limit Exa API usage.
 
 **Why at sync time:** The agent asking "tell me about the person who emailed me about the contract" currently has to: search zmail → get the sender → call Exa for the company → answer. With pre-enriched contacts, zmail returns "Jane Smith, VP Legal at Acme Corp (Series C enterprise SaaS company)" in the same response. Zero additional latency.
 
@@ -148,3 +162,9 @@ The enrich worker follows the same pattern: concurrent but independent, runs dur
 | **Thread similarity** | zmail has private content; Exa has the web. Neither alone can bridge both. |
 
 The pattern is always the same: **zmail has corpus context the agent doesn't, and Exa has web context zmail doesn't. The value is where those two contexts meet.** Sync-time enrichment amortizes cost; query-time fusion leverages corpus-aware expansion.
+
+---
+
+## See also
+
+- [OPP-004: People Index and Writable Contacts](opportunities/OPP-004-people-index-contacts.md) — `zmail who`, people index at index time, and `zmail contact` for writable metadata. Exa contact/entity enrichment (above) is the web-enrichment layer for that same people/contacts model.
