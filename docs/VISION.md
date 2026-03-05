@@ -335,11 +335,7 @@ Organizations build a company-wide communication intelligence layer.
 
 # Working Name
 
-Internal name:
-
-**Agent Mail Interface (AMI)**
-
-Potential goal:
+**zmail**
 
 ```
 Standard interface for agent-accessible communications

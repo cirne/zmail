@@ -1,8 +1,8 @@
-# agentmail
+# zmail
 
 Email as a queryable dataset for AI agents.
 
-Modern email systems are human-first — designed around inbox browsing and manual workflows. **agentmail** reimagines email as a structured, searchable dataset with a native interface for AI agents.
+Modern email systems are human-first — designed around inbox browsing and manual workflows. **zmail** reimagines email as a structured, searchable dataset with a native interface for AI agents.
 
 ## What it does
 
@@ -12,14 +12,14 @@ Modern email systems are human-first — designed around inbox browsing and manu
 - Extracts and indexes attachment content (PDF, DOCX, XLSX, and more)
 
 ```bash
-agentmail search "contract from kirsten last month"
-agentmail thread th_8473
-agentmail attachments read att_291   # returns PDF content as markdown
+zmail search "contract from kirsten last month"
+zmail thread th_8473
+zmail attachments read att_291   # returns PDF content as markdown
 ```
 
 ## Quick start (local hello world)
 
-**What’s in place today:** Config (env), SQLite DB + schema + FTS5, CLI (`sync` / `search` / `thread` / `message` / `mcp`), web UI (Hono), MCP server (stdio when you run `agentmail mcp`), and sync/provider scaffolding. **IMAP sync is not yet implemented** — `bun run sync` only logs; no mail is fetched until the sync engine is built.
+**What’s in place today:** Config (env), SQLite DB + schema + FTS5, CLI (`sync` / `search` / `thread` / `message` / `mcp`), web UI (Hono), MCP server (stdio when you run `zmail mcp`), and sync/provider scaffolding. **IMAP sync is not yet implemented** — `bun run sync` only logs; no mail is fetched until the sync engine is built.
 
 1. **Install and env**
    ```bash
@@ -53,7 +53,7 @@ agentmail attachments read att_291   # returns PDF content as markdown
    bun run src/cli/index.ts search "hello"
    bun run src/cli/index.ts thread some-id
    ```
-   Or build and run the binary: `bun run build` then `./dist/agentmail search "hello"`.
+   Or build and run the binary: `bun run build` then `./dist/zmail search "hello"`.
 
 ## Architecture
 

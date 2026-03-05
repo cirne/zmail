@@ -1,4 +1,4 @@
-# agentmail — Agent Guide
+# zmail — Agent Guide
 
 This file provides context for AI coding agents (Claude Code, Cursor, OpenClaw, etc.) working in this repository.
 
@@ -8,7 +8,7 @@ This file provides context for AI coding agents (Claude Code, Cursor, OpenClaw, 
 
 ## What this project is
 
-**agentmail** is an agent-first email system. It syncs email from IMAP providers, indexes it locally, and exposes it as a queryable dataset via a CLI binary and MCP server.
+**zmail** is an agent-first email system. It syncs email from IMAP providers, indexes it locally, and exposes it as a queryable dataset via a CLI binary and MCP server.
 
 The goal is not another email client. The goal is to make email a tool-accessible, searchable dataset for AI agents.
 
@@ -35,7 +35,7 @@ The goal is not another email client. The goal is to make email a tool-accessibl
 
 ```
 src/
-  cli/          agentmail binary entrypoint and subcommands
+  cli/          zmail binary entrypoint and subcommands
   sync/         IMAP sync engine, provider implementations
   db/           SQLite schema, migrations, query helpers
   search/       FTS5 and semantic search
@@ -48,14 +48,21 @@ docs/
   ARCHITECTURE.md
 ```
 
+## Search and indexing testing
+
+When you are asked to search for emails (or to verify search results), **use the standard search interface** — the same code path as the web search route ([`src/web/routes/search.ts`](src/web/routes/search.ts)). That way we exercise the real indexing and search pipeline for speed and accuracy.
+
+- **Do not peek behind the curtain:** do not query the database or filesystem directly for search. Use the CLI or the search API that the web uses (`search(db, { query })` from `~/search`), or trigger searches via the running service.
+- Direct DB or filesystem access is implicitly granted when debugging (e.g. figuring out why a search missed an expected hit) or when the user explicitly asks you to.
+
 ## Development conventions
 
 - **Read `docs/ARCHITECTURE.md` before making any storage, sync, or interface decisions.** All major decisions are recorded there with rationale.
 - Prefer `bun:sqlite` over any external SQLite library — it's built in and faster.
 - All storage access for raw files goes through a `StorageAdapter` interface (`LocalAdapter` default, `S3Adapter` optional).
 - Never commit email data, credentials, or `.db` files — see `.gitignore`.
-- **Local DB at dev time:** No migrations; schema is applied on DB creation. To apply schema changes or reset state, delete `data/` or `data/agentmail.db` and re-run. See [`.cursor/skills/db-dev/`](.cursor/skills/db-dev/) for the standard skill.
-- The CLI (`agentmail <command>`) and MCP server share the same underlying logic. Commands return structured JSON suitable for agent consumption.
+- **Local DB at dev time:** No migrations; schema is applied on DB creation. To apply schema changes or reset state, delete `data/` or `data/zmail.db` and re-run. See [`.cursor/skills/db-dev/`](.cursor/skills/db-dev/) for the standard skill.
+- The CLI (`zmail <command>`) and MCP server share the same underlying logic. Commands return structured JSON suitable for agent consumption.
 - Attachment extraction uses per-format libraries (`pdfjs-dist`, `mammoth`, `xlsx`) behind a `DocumentExtractor` interface.
 
 ## Running locally

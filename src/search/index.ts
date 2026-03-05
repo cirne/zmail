@@ -12,16 +12,66 @@ export interface SearchOptions {
   beforeDate?: string;
 }
 
+/** LIKE pattern for partial match on address or display name (e.g. "donna" -> "%donna%"). */
+function fromFilterPattern(value: string): string {
+  return `%${value}%`;
+}
+
 export function search(db: Database, opts: SearchOptions): SearchResult[] {
   const { query, limit = 20, offset = 0, fromAddress, afterDate, beforeDate } = opts;
+  const hasFilters = !!(fromAddress || afterDate || beforeDate);
 
-  // Build dynamic WHERE clause with optional filters
+  // Filter-only path: no FTS when query is empty but filters are present
+  if (!query?.trim() && hasFilters) {
+    const conditions: string[] = [];
+    const params: (string | number)[] = [];
+
+    if (fromAddress) {
+      const pattern = fromFilterPattern(fromAddress);
+      conditions.push("(m.from_address LIKE ? OR m.from_name LIKE ?)");
+      params.push(pattern, pattern);
+    }
+    if (afterDate) {
+      conditions.push("m.date >= ?");
+      params.push(afterDate);
+    }
+    if (beforeDate) {
+      conditions.push("m.date <= ?");
+      params.push(beforeDate);
+    }
+
+    params.push(limit, offset);
+    const where = `WHERE ${conditions.join(" AND ")}`;
+    const rows = db
+      .query(
+        /* sql */ `
+        SELECT
+          m.message_id   AS messageId,
+          m.thread_id    AS threadId,
+          m.from_address AS fromAddress,
+          m.from_name    AS fromName,
+          m.subject,
+          m.date,
+          COALESCE(TRIM(SUBSTR(m.body_text, 1, 200)), '') || (CASE WHEN LENGTH(m.body_text) > 200 THEN '…' ELSE '' END) AS snippet,
+          0 AS rank
+        FROM messages m
+        ${where}
+        ORDER BY m.date DESC
+        LIMIT ? OFFSET ?
+      `
+      )
+      .all(...params) as SearchResult[];
+    return rows;
+  }
+
+  // FTS path
   const conditions: string[] = ["messages_fts MATCH ?"];
   const params: (string | number)[] = [query];
 
   if (fromAddress) {
-    conditions.push("m.from_address = ?");
-    params.push(fromAddress);
+    const pattern = fromFilterPattern(fromAddress);
+    conditions.push("(m.from_address LIKE ? OR m.from_name LIKE ?)");
+    params.push(pattern, pattern);
   }
 
   if (afterDate) {
@@ -82,8 +132,9 @@ export async function semanticSearch(db: Database, opts: SearchOptions): Promise
   const params: (string | number)[] = [...messageIds];
 
   if (fromAddress) {
-    conditions.push("m.from_address = ?");
-    params.push(fromAddress);
+    const pattern = fromFilterPattern(fromAddress);
+    conditions.push("(m.from_address LIKE ? OR m.from_name LIKE ?)");
+    params.push(pattern, pattern);
   }
 
   if (afterDate) {

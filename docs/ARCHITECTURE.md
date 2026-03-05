@@ -27,7 +27,7 @@ IMAP provider → raw email store → SQLite FTS5 index → MCP server
 Container
 └── /data  (persistent volume — survives redeploys)
     ├── maildir/        ← raw .eml files
-    ├── agentmail.db    ← SQLite: metadata, FTS5 index, sync state
+    ├── zmail.db    ← SQLite: metadata, FTS5 index, sync state
     └── vectors/        ← LanceDB embedded
 ```
 
@@ -72,19 +72,19 @@ This layout applies to **both Phase 1 and Phase 2 (open source)**. Each user run
 **Decision:** The system exposes two agent interfaces that share the same underlying index:
 
 1. **Native CLI binary** — primary interface for local agent use (Claude Code, OpenClaw, terminal)
-2. **MCP server** (`agentmail mcp`) — for remote/hosted deployments
+2. **MCP server** (`zmail mcp`) — for remote/hosted deployments
 
 **CLI commands:**
 ```
-agentmail configure        ← interactive setup (IMAP credentials, sync config)
-agentmail sync             ← run / manage background sync daemon
-agentmail search <query>   ← full-text search, returns JSON
-agentmail thread <id>      ← fetch full thread
-agentmail message <id>     ← fetch single message
-agentmail mcp              ← start MCP server
+zmail configure        ← interactive setup (IMAP credentials, sync config)
+zmail sync             ← run / manage background sync daemon
+zmail search <query>   ← full-text search, returns JSON
+zmail thread <id>      ← fetch full thread
+zmail message <id>     ← fetch single message
+zmail mcp              ← start MCP server
 ```
 
-**Rationale:** Agents like Claude Code and OpenClaw can invoke shell commands directly. A subprocess call to `agentmail search` is faster than an MCP HTTP round-trip, requires no running server, and has no port management. The CLI returns structured JSON so agents can consume output directly.
+**Rationale:** Agents like Claude Code and OpenClaw can invoke shell commands directly. A subprocess call to `zmail search` is faster than an MCP HTTP round-trip, requires no running server, and has no port management. The CLI returns structured JSON so agents can consume output directly.
 
 MCP remains the right interface for remote/hosted deployments where the index lives on a server the agent can't shell into.
 
@@ -186,7 +186,7 @@ FTS5 virtual tables on `body_text` and `subject` live in the same `.db` file.
 
 **Auth:**
 - Phase 1: App password (Gmail Settings → Security → 2-Step Verification → App Passwords). No OAuth, no Google Cloud Console setup.
-- Phase 2: OAuth 2.0 via browser flow in `agentmail configure`. Required for smooth open-source onboarding.
+- Phase 2: OAuth 2.0 via browser flow in `zmail configure`. Required for smooth open-source onboarding.
 
 **Provider abstraction:**
 ```
@@ -223,8 +223,8 @@ ImapProvider (interface)
 
 **Agent interface:**
 ```
-CLI:  agentmail attachments list <thread_id>
-      agentmail attachments read <attachment_id>   → markdown output
+CLI:  zmail attachments list <thread_id>
+      zmail attachments read <attachment_id>   → markdown output
 
 MCP:  list_attachments(thread_id?, filters?)
       read_attachment(attachment_id)               → markdown string
@@ -343,11 +343,11 @@ Single Bun process
 **Decision:** Sync runs **synchronously**. Progress is observable in two ways so agents (or humans) can infer status and speed without introducing a job queue:
 
 1. **Periodic progress to stdout** — During sync, emit progress lines at a regular cadence (e.g. every N messages or every few seconds): messages fetched so far, bytes downloaded, elapsed time, throughput (msg/min). When the run finishes, always emit a final metrics block (messages new/fetched, bytes, bandwidth, msg/min, duration).
-2. **Pollable progress** — Write current-run progress to a well-known place (e.g. a progress file under DATA_DIR or fields in sync_summary / a small table) so another agent or process can poll (e.g. `agentmail status` or reading a file) and report status even when the runner does not stream stdout.
+2. **Pollable progress** — Write current-run progress to a well-known place (e.g. a progress file under DATA_DIR or fields in sync_summary / a small table) so another agent or process can poll (e.g. `zmail status` or reading a file) and report status even when the runner does not stream stdout.
 
 We do **not** introduce async job IDs or a job queue for sync unless we later need multiple concurrent syncs or very long-running jobs that must outlive a single CLI invocation.
 
-**Rationale:** Agent-first (VISION) means the primary consumers of the CLI are agents (Claude Code, OpenClaw, Pi, etc.). They invoke `agentmail sync` as a subprocess. Some environments stream stdout, so periodic progress lines give live feedback; others only return output on exit, so the final metrics block is still available. A pollable source (file or DB + `agentmail status`) lets a *different* agent or process observe “sync in progress” without depending on streaming. Keeping sync synchronous avoids job storage, lifecycle, and daemon complexity for the common case (single-user, single sync at a time).
+**Rationale:** Agent-first (VISION) means the primary consumers of the CLI are agents (Claude Code, OpenClaw, Pi, etc.). They invoke `zmail sync` as a subprocess. Some environments stream stdout, so periodic progress lines give live feedback; others only return output on exit, so the final metrics block is still available. A pollable source (file or DB + `zmail status`) lets a *different* agent or process observe “sync in progress” without depending on streaming. Keeping sync synchronous avoids job storage, lifecycle, and daemon complexity for the common case (single-user, single sync at a time).
 
 **Result:** Sync is fast, accurate, and reports how fast it was (ADR-016/017). It also makes progress observable so other agents can inspect and report status as it goes.
 
@@ -375,13 +375,13 @@ We do **not** introduce async job IDs or a job queue for sync unless we later ne
 
 ### ADR-020: Sync and Indexing — Two Concurrent Workers, One Command
 
-**Decision:** `agentmail sync` is the single user-facing command. Under the hood, it orchestrates two concurrent workers in the same process:
+**Decision:** `zmail sync` is the single user-facing command. Under the hood, it orchestrates two concurrent workers in the same process:
 
 1. **Sync worker** (bandwidth-bound): IMAP fetch → write `.eml` to maildir → insert into SQLite. Optimized to saturate network bandwidth (ADR-016/017).
 2. **Index worker** (API-rate-bound): Read un-indexed messages from SQLite → generate embeddings via OpenAI → write to LanceDB. Runs with maximum parallelism the API key allows.
 
 ```
-agentmail sync
+zmail sync
 ├── Sync worker:  IMAP → maildir + SQLite  (bandwidth-bound)
 └── Index worker: SQLite → OpenAI → LanceDB  (API-rate-bound)
 ```
@@ -392,7 +392,7 @@ agentmail sync
 - Sync and indexing run **concurrently with each other** (different write targets: SQLite vs. LanceDB — no contention).
 - Neither runs **concurrently with itself** (advisory lock via DB flag per worker).
 - Both workers share the same process. No IPC, no daemon, no job queue.
-- `agentmail sync` waits for both workers to complete before exiting.
+- `zmail sync` waits for both workers to complete before exiting.
 - If `OPENAI_API_KEY` is not set, sync runs alone (FTS-only mode, no indexing).
 
 **Advisory lock pattern:**
@@ -403,11 +403,11 @@ agentmail sync
 
 **Observability:**
 - Both workers track progress in the DB (`sync_summary`, `indexing_status`).
-- `agentmail status` reads both tables and reports current state.
+- `zmail status` reads both tables and reports current state.
 - Agents and remote clients can poll status at any time without depending on stdout.
 - Stdout progress lines are emitted periodically for environments that stream output.
 
-**No standalone indexing command.** There is no `agentmail index` or backfill tool. `agentmail sync` is the only entry point for data ingestion and indexing — one command, one process.
+**No standalone indexing command.** There is no `zmail index` or backfill tool. `zmail sync` is the only entry point for data ingestion and indexing — one command, one process.
 
 **Rationale:** Embedding via an external API (OpenAI) adds ~50–100ms latency per message. Running this inline during sync would make sync API-bound instead of bandwidth-bound, violating ADR-016. Separating the two workers lets each optimize for its own bottleneck while presenting a single command to the user.
 

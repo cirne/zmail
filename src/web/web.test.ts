@@ -15,10 +15,10 @@ describe("web routes", () => {
       expect(res.headers.get("content-type")).toContain("text/html");
     });
 
-    it("includes agentmail in the page", async () => {
+    it("includes zmail in the page", async () => {
       const res = await app.request("/setup");
       const body = await res.text();
-      expect(body).toContain("agentmail");
+      expect(body).toContain("zmail");
     });
   });
 

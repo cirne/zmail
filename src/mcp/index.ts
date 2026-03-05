@@ -7,7 +7,7 @@ import { logger } from "~/lib/logger";
 
 export function createMcpServer() {
   const server = new McpServer({
-    name: "agentmail",
+    name: "zmail",
     version: "0.1.0",
   });
 

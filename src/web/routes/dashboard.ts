@@ -10,13 +10,13 @@ dashboardRoutes.get("/", (c) => {
     <html lang="en">
       <head>
         <meta charset="UTF-8" />
-        <title>agentmail</title>
+        <title>zmail</title>
         <script src="https://unpkg.com/htmx.org@2.0.4"></script>
         <link rel="stylesheet" href="/public/app.css" />
       </head>
       <body>
         <main>
-          <h1>agentmail</h1>
+          <h1>zmail</h1>
 
           <!-- Sync status — HTMX polls every 3s -->
           <section

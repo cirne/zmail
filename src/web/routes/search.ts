@@ -15,7 +15,7 @@ searchRoutes.get("/", (c) => {
     <html lang="en">
       <head>
         <meta charset="UTF-8" />
-        <title>agentmail — search</title>
+        <title>zmail — search</title>
         <script src="https://unpkg.com/htmx.org@2.0.4"></script>
         <link rel="stylesheet" href="/public/app.css" />
       </head>

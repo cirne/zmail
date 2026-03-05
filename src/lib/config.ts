@@ -43,7 +43,7 @@ export const config = {
 
   // Derived paths
   get dbPath() {
-    return join(this.dataDir, "agentmail.db");
+    return join(this.dataDir, "zmail.db");
   },
   get maildirPath() {
     return join(this.dataDir, "maildir");

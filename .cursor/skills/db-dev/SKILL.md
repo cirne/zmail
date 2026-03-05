@@ -12,7 +12,7 @@ description: Reset and manage the local SQLite database and data dir at dev time
 ## Where data lives
 
 - **Root:** `DATA_DIR` (default `./data`). Canonical list: `.env.example` (see AGENTS.md).
-- **DB:** `DATA_DIR/agentmail.db` (and WAL files `-shm`, `-wal`).
+- **DB:** `DATA_DIR/zmail.db` (and WAL files `-shm`, `-wal`).
 - **Maildir:** `DATA_DIR/maildir/` (raw .eml in `cur/`, `new/`, `tmp/`).
 - **Sync state:** Stored inside the DB (`sync_state`, `sync_summary`).
 
@@ -29,10 +29,10 @@ rm -rf data/
 **DB only** (keeps maildir; use only when DB is bad but maildir is known good):
 
 ```bash
-rm -f data/agentmail.db data/agentmail.db-shm data/agentmail.db-wal
+rm -f data/zmail.db data/zmail.db-shm data/zmail.db-wal
 ```
 
-After either, the next run that uses the DB (e.g. `bun run sync` or `agentmail search`) will create a new DB and apply the current schema. First sync after a full reset is full; later syncs are incremental.
+After either, the next run that uses the DB (e.g. `bun run sync` or `zmail search`) will create a new DB and apply the current schema. First sync after a full reset is full; later syncs are incremental.
 
 ## When to reset
 

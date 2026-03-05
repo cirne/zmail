@@ -9,7 +9,7 @@ const [, , command] = process.argv;
 if (command) {
   await import("~/cli");
 } else {
-  logger.info("Starting agentmail");
+  logger.info("Starting zmail");
   const { startWebServer } = await import("~/web");
   await startWebServer();
   runSync().catch((err) => {

@@ -20,7 +20,7 @@ This doc records the first run (stub), the first successful sync, and fixes appl
 - **Exit code:** 0 (success)
 - **Logs:** `Sync starting` → `Sync complete` in &lt;1s
 - **Reality:** No IMAP connection was made. No mail was fetched. Sync is a stub: `runSync()` only logs and returns. `GmailProvider` / `GenericImapProvider` are not invoked.
-- **Data:** `data/` was not created by sync (sync never calls `getDb()` or touches maildir). The `data/` directory and `agentmail.db` were created later when running the CLI `search` command, which calls `getDb()`.
+- **Data:** `data/` was not created by sync (sync never calls `getDb()` or touches maildir). The `data/` directory and `zmail.db` were created later when running the CLI `search` command, which calls `getDb()`.
 
 ### Search
 
@@ -47,7 +47,7 @@ This doc records the first run (stub), the first successful sync, and fixes appl
 ### 3. CLI can fail with ENOENT (hono) if deps not installed
 
 - **What:** Running `bun run src/index.ts search "test"` before `bun install` produced:  
-  `error: ENOENT while resolving package 'hono' from '/Users/cirne/dev/agentmail/src/web/index.ts'`
+  `error: ENOENT while resolving package 'hono' from '/Users/cirne/dev/zmail/src/web/index.ts'`
 - **Why:** The main entrypoint `src/index.ts` has top-level imports of `~/web` and `~/sync`. So any CLI invocation loads the web stack and requires `hono`. The `sync` script runs only `src/sync/index.ts`, which does not import web, so sync can run without installing deps.
 - **Improvement:** Either (a) document that `bun install` is required before any use of the main binary/CLI, or (b) restructure so CLI-only invocations don’t pull in the web server (e.g. CLI entrypoint that doesn’t import web until needed, or separate entrypoints). Quick start already says `bun install` first; first-run experience suggests making that very visible or lazy-loading web.
 
@@ -79,7 +79,7 @@ Minimal IMAP sync was implemented and run:
 
 - **Config:** `requireImapConfig()` at start; fail if `IMAP_USER` or `IMAP_PASSWORD` missing.
 - **Flow:** Connect (imapflow), open INBOX, `search({ since: SYNC_FROM_DATE })`, `fetchAll` in batches of 50 with `source: true`, write raw to `data/maildir/cur/<uid>_<safe>.eml`, parse with mailparser, insert into `messages` + `threads`, update `sync_state` and `sync_summary`.
-- **Result:** 94 messages synced (SYNC_FROM_DATE=2026-03-01), ~5.7s. Search returns real results (e.g. `agentmail search "Golf"`).
+- **Result:** 94 messages synced (SYNC_FROM_DATE=2026-03-01), ~5.7s. Search returns real results (e.g. `zmail search "Golf"`).
 
 **Remaining opportunities (from original list):**
 

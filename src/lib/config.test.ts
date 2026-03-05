@@ -36,7 +36,7 @@ describe("config", () => {
 
   describe("derived paths", () => {
     it("dbPath is inside dataDir", () => {
-      expect(config.dbPath).toBe(join(config.dataDir, "agentmail.db"));
+      expect(config.dbPath).toBe(join(config.dataDir, "zmail.db"));
     });
 
     it("maildirPath is inside dataDir", () => {

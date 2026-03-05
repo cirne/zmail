@@ -20,6 +20,7 @@ export interface IndexingResult {
   skipped: number;
   failed: number;
   durationMs: number;
+  messagesPerMinute: number;
 }
 
 interface IndexingStatus {
@@ -102,7 +103,7 @@ function releaseLock(db: Database, indexed: number, failed: number): void {
  */
 export async function indexMessages(): Promise<IndexingResult> {
   if (!config.openai.apiKey) {
-    return { indexed: 0, skipped: 0, failed: 0, durationMs: 0 };
+    return { indexed: 0, skipped: 0, failed: 0, durationMs: 0, messagesPerMinute: 0 };
   }
 
   const startTime = Date.now();
@@ -140,13 +141,13 @@ export async function indexMessages(): Promise<IndexingResult> {
 
   if (toIndex.length === 0) {
     logger.info("All messages already indexed");
-    return { indexed: 0, skipped: 0, failed: 0, durationMs: Date.now() - startTime };
+    return { indexed: 0, skipped: 0, failed: 0, durationMs: Date.now() - startTime, messagesPerMinute: 0 };
   }
 
   // Try to acquire lock
   if (!acquireLock(db, toIndex.length)) {
     logger.info("Indexing already in progress, skipping");
-    return { indexed: 0, skipped: toIndex.length, failed: 0, durationMs: Date.now() - startTime };
+    return { indexed: 0, skipped: toIndex.length, failed: 0, durationMs: Date.now() - startTime, messagesPerMinute: 0 };
   }
 
   logger.info("Indexing started", { total: toIndex.length });
@@ -206,11 +207,12 @@ export async function indexMessages(): Promise<IndexingResult> {
   }
 
   const durationMs = Date.now() - startTime;
+  const messagesPerMinute = durationMs > 0 ? Math.round((indexed / durationMs) * 60000) : 0;
   logger.info("Indexing complete", {
     indexed,
     failed,
     durationMs,
-    messagesPerMinute: durationMs > 0 ? Math.round((indexed / durationMs) * 60000) : 0,
+    messagesPerMinute,
   });
 
   return {
@@ -218,5 +220,6 @@ export async function indexMessages(): Promise<IndexingResult> {
     skipped: toIndex.length - indexed - failed,
     failed,
     durationMs,
+    messagesPerMinute,
   };
 }

@@ -1,11 +1,11 @@
 {
-  "name": "agentmail",
+  "name": "zmail",
   "version": "0.1.0",
   "description": "Agent-first email system — sync, index, and search email for AI agents",
   "scripts": {
     "dev": "bun run src/index.ts",
     "sync": "bun run src/sync/index.ts",
-    "build": "bun build src/index.ts --compile --outfile dist/agentmail",
+    "build": "bun build src/index.ts --compile --outfile dist/zmail",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "lint": "tsc --noEmit"

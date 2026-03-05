@@ -15,7 +15,7 @@ async function main() {
       const sinceIdx = args.indexOf("--since");
       const since = sinceIdx >= 0 ? args[sinceIdx + 1] : undefined;
       if (sinceIdx >= 0 && (since === undefined || since.startsWith("-"))) {
-        console.error("Usage: agentmail sync [--since <spec>]");
+        console.error("Usage: zmail sync [--since <spec>]");
         console.error("  --since  relative range: 7d, 5w, 3m, 2y (days, weeks, months, years)");
         process.exit(1);
       }
@@ -30,7 +30,7 @@ async function main() {
             if (syncResult.synced > 0 || syncResult.messagesFetched > 0) {
               return indexMessages();
             }
-            return { indexed: 0, skipped: 0, failed: 0, durationMs: 0 };
+            return { indexed: 0, skipped: 0, failed: 0, durationMs: 0, messagesPerMinute: 0 };
           })
         : null;
 
@@ -57,9 +57,11 @@ async function main() {
             const sec = (indexResult.durationMs / 1000).toFixed(2);
             console.log("");
             console.log("Indexing metrics:");
-            console.log(`  indexed: ${indexResult.indexed}`);
-            if (indexResult.failed > 0) console.log(`  failed:  ${indexResult.failed}`);
-            console.log(`  duration: ${sec}s`);
+            console.log(`  indexed:    ${indexResult.indexed}`);
+            if (indexResult.skipped > 0) console.log(`  skipped:    ${indexResult.skipped}`);
+            if (indexResult.failed > 0) console.log(`  failed:     ${indexResult.failed}`);
+            console.log(`  throughput: ${indexResult.messagesPerMinute} msg/min`);
+            console.log(`  duration:   ${sec}s`);
           }
         } catch (err) {
           logger.error("Indexing failed", { error: String(err) });
@@ -86,7 +88,7 @@ async function main() {
 
       // Validate flag values
       if (fromIdx >= 0 && (!fromAddress || fromAddress.startsWith("-"))) {
-        console.error("Usage: agentmail search <query> [flags]");
+        console.error("Usage: zmail search <query> [flags]");
         console.error("  --from      filter by sender email address");
         console.error("  --after     filter by date (ISO YYYY-MM-DD or relative: 7d, 2w, 1m)");
         console.error("  --before    filter by date (ISO YYYY-MM-DD or relative: 7d, 2w, 1m)");
@@ -97,15 +99,15 @@ async function main() {
         process.exit(1);
       }
       if (afterIdx >= 0 && (!afterRaw || afterRaw.startsWith("-"))) {
-        console.error("Usage: agentmail search <query> [--from <address>] [--after <date>] [--before <date>] [--limit <n>] [--json]");
+        console.error("Usage: zmail search <query> [--from <address>] [--after <date>] [--before <date>] [--limit <n>] [--json]");
         process.exit(1);
       }
       if (beforeIdx >= 0 && (!beforeRaw || beforeRaw.startsWith("-"))) {
-        console.error("Usage: agentmail search <query> [--from <address>] [--after <date>] [--before <date>] [--limit <n>] [--json]");
+        console.error("Usage: zmail search <query> [--from <address>] [--after <date>] [--before <date>] [--limit <n>] [--json]");
         process.exit(1);
       }
       if (limitIdx >= 0 && (!limitRaw || limitRaw.startsWith("-"))) {
-        console.error("Usage: agentmail search <query> [--from <address>] [--after <date>] [--before <date>] [--limit <n>] [--json]");
+        console.error("Usage: zmail search <query> [--from <address>] [--after <date>] [--before <date>] [--limit <n>] [--json]");
         process.exit(1);
       }
 
@@ -170,23 +172,28 @@ async function main() {
         flagIndices.add(jsonIdx);
       }
 
-      const queryParts = args.filter((_, idx) => !flagIndices.has(idx));
-      const query = queryParts.join(" ");
-
-      if (!query) {
-        console.error("Usage: agentmail search <query> [flags]");
-        console.error("Run 'agentmail search --help' for details");
-        process.exit(1);
-      }
-
       // Remove semantic/hybrid from flag indices so they don't get included in query
       if (semanticIdx >= 0) flagIndices.add(semanticIdx);
       if (hybridIdx >= 0) flagIndices.add(hybridIdx);
+
+      const queryParts = args.filter((_, idx) => !flagIndices.has(idx));
+      const query = queryParts.join(" ").trim();
+
+      const hasFilters = !!(fromAddress || afterDate || beforeDate);
+      if (!query && !hasFilters) {
+        console.error("Usage: zmail search <query> [flags]");
+        console.error("Provide a query and/or filters (--from, --after, --before). Run 'zmail search --help' for details.");
+        process.exit(1);
+      }
 
       // Determine search mode
       const mode = hybridIdx >= 0 ? "hybrid" : semanticIdx >= 0 ? "semantic" : "fts";
       if ((semanticIdx >= 0 || hybridIdx >= 0) && !process.env.OPENAI_API_KEY) {
         console.error("Error: --semantic and --hybrid require OPENAI_API_KEY to be set in .env");
+        process.exit(1);
+      }
+      if (mode !== "fts" && !query) {
+        console.error("Semantic and hybrid search require a query. Omit --semantic/--hybrid for filter-only search.");
         process.exit(1);
       }
 
@@ -249,7 +256,7 @@ async function main() {
     case "thread": {
       const threadId = args[0];
       if (!threadId) {
-        console.error("Usage: agentmail thread <thread_id>");
+        console.error("Usage: zmail thread <thread_id>");
         process.exit(1);
       }
       const db = getDb();
@@ -263,7 +270,7 @@ async function main() {
     case "message": {
       const messageId = args[0];
       if (!messageId) {
-        console.error("Usage: agentmail message <message_id>");
+        console.error("Usage: zmail message <message_id>");
         process.exit(1);
       }
       const db = getDb();
@@ -359,16 +366,16 @@ async function main() {
     }
 
     default: {
-      console.log(`agentmail — agent-first email
+      console.log(`zmail — agent-first email
 
 Usage:
-  agentmail sync [--since <spec>]     Sync email + index embeddings (e.g. --since 7d, 5w, 3m, 2y)
-  agentmail search <query> [flags]    Search email (see --help for flags)
-  agentmail status                    Show sync and indexing status
-  agentmail stats                     Show database statistics
-  agentmail thread <id>               Fetch full thread (returns JSON)
-  agentmail message <id>              Fetch single message (returns JSON)
-  agentmail mcp                       Start MCP server (stdio)
+  zmail sync [--since <spec>]     Sync email + index embeddings (e.g. --since 7d, 5w, 3m, 2y)
+  zmail search <query> [flags]    Search email (see --help for flags)
+  zmail status                    Show sync and indexing status
+  zmail stats                     Show database statistics
+  zmail thread <id>               Fetch full thread (returns JSON)
+  zmail message <id>              Fetch single message (returns JSON)
+  zmail mcp                       Start MCP server (stdio)
 `);
       if (command) {
         logger.error(`Unknown command: ${command}`);
