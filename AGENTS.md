@@ -46,8 +46,8 @@ bun run lint         # tsc --noEmit (no ESLint)
 bun test             # run test suite
 ```
 
-## Env Varialbles
-first check existing environmetnt for required variables, which are:
+## Environment variables
+First, check whether these required variables are already present in the current environment:
 
 ```
 IMAP_USER=you@gmail.com
@@ -55,4 +55,9 @@ IMAP_PASSWORD=your-16-char-app-password
 OPENAI_API_KEY=sk-...
 ```
 
-if one or more are not specified you will need to setup a .env file (see .env.example)
+If one or more are missing, set up a local `.env` file from the example:
+
+1. Copy `.env.example` to `.env` (if `.env` does not already exist).
+2. Fill in any missing required values.
+
+If all required variables are already present (for example in Cursor Cloud, CI, or other preconfigured environments), do **not** create or modify `.env`.
