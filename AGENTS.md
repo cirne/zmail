@@ -87,3 +87,15 @@ Canonical sync behavior: [`.env.example`](.env.example) (SYNC_MAILBOX, SYNC_EXCL
 ## Environment variables
 
 Canonical list and descriptions: [`.env.example`](.env.example). Summary: `IMAP_*`, `SYNC_FROM_DATE`, `SYNC_MAILBOX`, `SYNC_EXCLUDE_LABELS`, `GOOGLE_*`, `AUTH_SECRET`, `PORT`, `DATA_DIR`, optional `OPENAI_API_KEY`.
+
+## Cursor Cloud specific instructions
+
+- **Runtime:** Bun is installed at `~/.bun/bin/bun`. The update script handles installation if missing.
+- **Starting the dev server:** `bun run dev` starts the Hono web UI (port 3000) + MCP endpoint + background sync in a single process. The sync daemon will log an error on startup if `IMAP_USER`/`IMAP_PASSWORD` are not set — this is expected and does not block the web UI or search functionality.
+- **Secrets required for sync:** `IMAP_USER` and `IMAP_PASSWORD` must be configured as Cursor secrets. Without them the web UI and search still work, but no email is synced. `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `OPENAI_API_KEY` are optional (OAuth login and semantic search respectively).
+- **`.env` file:** The dev server reads from `.env` at the repo root. On first setup, copy `.env.example` to `.env`. Environment variables from Cursor secrets are injected automatically and override `.env` values.
+- **No external services:** SQLite and LanceDB are both embedded — no database server to start. Everything runs in a single `bun run dev` process.
+- **Lint = typecheck:** `bun run lint` and `bun run typecheck` both run `tsc --noEmit`. There is no separate ESLint config.
+- **Tests:** `bun test` runs all tests. Tests are self-contained (in-memory SQLite) and do not require IMAP credentials or a running server.
+- **Build:** `bun run build` compiles to a native binary at `dist/zmail`.
+- **DB reset:** Delete `data/` or `data/zmail.db` and re-run to reset. See `.cursor/skills/db-dev/SKILL.md`.
