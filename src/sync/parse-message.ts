@@ -1,4 +1,4 @@
-import { simpleParser } from "mailparser";
+import PostalMime from "postal-mime";
 
 export interface ParsedMessage {
   messageId: string;
@@ -12,38 +12,23 @@ export interface ParsedMessage {
   bodyHtml: string | null;
 }
 
-function collectAddresses(value: unknown): string[] {
-  const addrs: string[] = [];
-  const arr = Array.isArray(value) ? value : value ? [value] : [];
-  for (const item of arr) {
-    const addr = item && typeof item === "object" && "address" in item ? (item as { address: string }).address : null;
-    if (addr) addrs.push(addr);
-  }
-  return addrs;
-}
-
 export async function parseRawMessage(raw: Buffer): Promise<ParsedMessage> {
-  const parsed = await simpleParser(raw);
-  const from = parsed.from?.value?.[0];
-  const fromAddress = from?.address ?? "";
-  const fromName = from?.name ?? null;
-  const toAddresses = collectAddresses(parsed.to);
-  const ccAddresses = collectAddresses(parsed.cc);
-  const subject = parsed.subject ?? "";
-  const date = parsed.date ? new Date(parsed.date).toISOString() : new Date().toISOString();
-  const bodyText = parsed.text ?? "";
-  const bodyHtml = parsed.html ? (typeof parsed.html === "string" ? parsed.html : null) : null;
-  const messageId = parsed.messageId ?? `<unknown-${Date.now()}@local>`;
+  // postal-mime is stream-free and works correctly in Bun (unlike mailparser's
+  // Writable-based MailParser, whose _write callback is never invoked in Bun).
+  const email = await PostalMime.parse(raw.buffer as ArrayBuffer);
+
+  const messageId = email.messageId ?? `<unknown-${Date.now()}@local>`;
+  const date = email.date ? new Date(email.date).toISOString() : new Date().toISOString();
 
   return {
     messageId,
-    fromAddress,
-    fromName,
-    toAddresses,
-    ccAddresses,
-    subject,
+    fromAddress: email.from?.address ?? "",
+    fromName: email.from?.name || null,
+    toAddresses: (email.to ?? []).map((a) => a.address).filter((a): a is string => Boolean(a)),
+    ccAddresses: (email.cc ?? []).map((a) => a.address).filter((a): a is string => Boolean(a)),
+    subject: email.subject ?? "",
     date,
-    bodyText,
-    bodyHtml,
+    bodyText: email.text ?? "",
+    bodyHtml: email.html ?? null,
   };
 }

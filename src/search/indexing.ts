@@ -138,14 +138,32 @@ async function processBatch(
  * Claims batches serially (fast, single-writer), but runs N embedding API calls
  * in parallel. This saturates the OpenAI rate limit without any thread contention.
  */
-export async function indexMessages(): Promise<IndexingResult> {
-  if (!config.openai.apiKey) {
+export async function indexMessages(options?: {
+  /**
+   * Promise that resolves when sync has finished inserting messages.
+   * While unresolved, the indexer keeps polling for new work.
+   * When resolved (or not provided), the indexer exits once the queue is empty.
+   */
+  syncDone?: Promise<void>;
+  /**
+   * For testing: inject a DB instance instead of calling getDb().
+   * Also bypasses the OPENAI_API_KEY check when provided alongside _processBatch.
+   */
+  db?: Database;
+  /**
+   * For testing: replace the real processBatch (which calls OpenAI + LanceDB)
+   * with a fake that returns immediately. When provided, skips the API key check.
+   */
+  _processBatch?: (db: Database, batch: MessageRow[]) => Promise<{ indexed: number; failed: number }>;
+}): Promise<IndexingResult> {
+  if (!config.openai.apiKey && !options?._processBatch) {
     logger.warn("OPENAI_API_KEY not set, skipping indexing");
     return { indexed: 0, skipped: 0, failed: 0, durationMs: 0, messagesPerMinute: 0 };
   }
 
   const startTime = Date.now();
-  const db = getDb();
+  const db = options?.db ?? getDb();
+  const batchFn = options?._processBatch ?? processBatch;
 
   const lockResult = acquireLock(db, "indexing_status", process.pid);
   if (!lockResult.acquired) {
@@ -172,6 +190,11 @@ export async function indexMessages(): Promise<IndexingResult> {
   const concurrency = getConcurrency();
   logger.info("Indexing started", { concurrency });
 
+  // Track when sync signals it's done inserting messages.
+  // If no signal is provided (standalone indexing), treat sync as already done.
+  let syncFinished = !options?.syncDone;
+  options?.syncDone?.then(() => { syncFinished = true; }).catch(() => { syncFinished = true; });
+
   let totalIndexed = 0;
   let totalFailed = 0;
 
@@ -187,18 +210,18 @@ export async function indexMessages(): Promise<IndexingResult> {
       const batch = claimBatch(db, BATCH_SIZE);
 
       if (batch.length === 0) {
-        if (isSyncRunning(db)) {
-          // Sync still running — break inner loop and wait below
+        if (!syncFinished) {
+          // Sync still running — more messages may arrive, keep waiting
           break;
         }
-        // Sync done and queue empty — we're done after in-flight batches finish
+        // Sync done and queue empty — drain in-flight then exit
         done = true;
         break;
       }
 
       emptyPolls = 0;
 
-      const batchPromise = processBatch(db, batch).then((result) => {
+      const batchPromise = batchFn(db, batch).then((result) => {
         totalIndexed += result.indexed;
         totalFailed += result.failed;
 

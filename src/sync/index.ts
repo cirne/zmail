@@ -110,6 +110,9 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
     secure: imap.port === 993,
     auth: { user: imap.user, pass: imap.password },
     logger: false, // Keep sync output minimal; our logger reports start/complete/count
+    connectionTimeout: 10000, // 10s to establish connection
+    // NOTE: do not set socketTimeout — causes a segfault in Bun v1.1.38 on TLS sockets.
+    // Use JS-level Promise.race timeout around fetchAll instead (see below).
   });
 
   try {
@@ -161,13 +164,35 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
       let earliestDate: string | null = null;
       let latestDate: string | null = null;
 
+      // Track the highest UID we've successfully checkpointed so far.
+      // Starts from the last known checkpoint (may be 0 on first run).
+      let checkpointUid = state && state.uidvalidity === uidvalidity ? (state.last_uid ?? 0) : 0;
+
       for (let i = 0; i < uids.length; i += BATCH_SIZE) {
         const batch = uids.slice(i, i + BATCH_SIZE);
-        const messages = await client.fetchAll(
-          batch,
-          { envelope: true, source: true, labels: true },
-          { uid: true }
-        );
+        const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+        const totalBatches = Math.ceil(uids.length / BATCH_SIZE);
+        logger.info("fetchAll start", {
+          batch: `${batchNum}/${totalBatches}`,
+          uids: batch.length,
+          uidRange: `${batch[0]}..${batch[batch.length - 1]}`,
+        });
+        const fetchStart = Date.now();
+        let fetchTimeoutId: ReturnType<typeof setTimeout> | undefined;
+        const messages = await Promise.race([
+          client.fetchAll(batch, { envelope: true, source: true, labels: true }, { uid: true }),
+          new Promise<never>((_, reject) => {
+            fetchTimeoutId = setTimeout(() => {
+              reject(new Error(`fetchAll timed out after 30s (batch ${batchNum}/${totalBatches}, ${batch.length} UIDs)`));
+            }, 30_000);
+          }),
+        ]);
+        clearTimeout(fetchTimeoutId);
+        logger.info("fetchAll done", {
+          batch: `${batchNum}/${totalBatches}`,
+          messages: messages.length,
+          elapsedMs: Date.now() - fetchStart,
+        });
 
         for (const msg of messages) {
           const raw = msg.source;
@@ -186,9 +211,15 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
           const uid = msg.uid;
           let parsed;
           try {
-            parsed = await parseRawMessage(Buffer.from(raw));
+            // Hard 5s timeout: a stuck parser never blocks the full sync.
+            parsed = await Promise.race([
+              parseRawMessage(Buffer.from(raw)),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error("parse timeout")), 5_000)
+              ),
+            ]);
           } catch (err) {
-            logger.warn("Parse failed, skipping message", { uid, error: String(err) });
+            logger.warn("Parse failed, skipping message", { uid, bytes: Buffer.byteLength(raw), error: String(err) });
             continue;
           }
 
@@ -236,20 +267,18 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
           if (!earliestDate || parsed.date < earliestDate) earliestDate = parsed.date;
           if (!latestDate || parsed.date > latestDate) latestDate = parsed.date;
         }
-      }
 
-      const lastUid =
-        state && state.uidvalidity === uidvalidity && state.last_uid > 0
-          ? uids.length > 0
-            ? Math.max(state.last_uid, ...uids)
-            : state.last_uid
-          : allUids.length > 0
-            ? Math.max(...allUids)
-            : 0;
-      db.run(
-        "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)",
-        [mailbox, uidvalidity, lastUid]
-      );
+        // Checkpoint after each batch: next run skips these UIDs entirely,
+        // even if we crash before the full sync completes.
+        const batchMaxUid = Math.max(...batch);
+        if (batchMaxUid > checkpointUid) {
+          checkpointUid = batchMaxUid;
+          db.run(
+            "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)",
+            [mailbox, uidvalidity, checkpointUid]
+          );
+        }
+      }
 
       db.run(
         `UPDATE sync_summary SET
@@ -283,11 +312,9 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
     logger.error("Sync failed", { error: String(err) });
     throw err;
   } finally {
-    try {
-      await client.logout();
-    } catch {
-      client.close();
-    }
+    // Force-close the connection. On a stalled/timed-out socket, logout hangs
+    // indefinitely, so we close unconditionally and let the OS clean up TCP state.
+    client.close();
   }
 }
 

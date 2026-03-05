@@ -1,7 +1,6 @@
 import { runSync } from "~/sync";
 import { search } from "~/search";
 import { indexMessages } from "~/search/indexing";
-import { config } from "~/lib/config";
 import { getDb } from "~/db";
 import { startMcpServer } from "~/mcp";
 import { logger } from "~/lib/logger";
@@ -20,9 +19,17 @@ async function main() {
         process.exit(1);
       }
 
-      // Run sync (bandwidth-bound) and indexing (API-rate-bound) concurrently (ADR-020)
-      const syncPromise = runSync(since ? { since } : undefined);
-      const indexPromise = indexMessages(); // Start immediately, not after sync completes
+      // Run sync (bandwidth-bound) and indexing (API-rate-bound) concurrently (ADR-020).
+      // syncDone resolves when sync finishes inserting messages, signaling the indexer
+      // to drain the queue and exit — regardless of whether sync found 0 or 1000 messages.
+      let resolveSyncDone!: () => void;
+      const syncDone = new Promise<void>((resolve) => { resolveSyncDone = resolve; });
+
+      const syncPromise = runSync(since ? { since } : undefined).then((result) => {
+        resolveSyncDone();
+        return result;
+      });
+      const indexPromise = indexMessages({ syncDone });
 
       // Wait for both to complete
       const [syncResult, indexResult] = await Promise.all([syncPromise, indexPromise]);

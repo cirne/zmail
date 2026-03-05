@@ -1,8 +1,19 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { createTestDb, insertTestMessage } from "~/db/test-helpers";
-import { claimBatch, resetStaleClaims, isSyncRunning, BATCH_SIZE } from "./indexing";
+import { claimBatch, resetStaleClaims, isSyncRunning, indexMessages, type MessageRow } from "./indexing";
 import { hasEmbedding } from "./vectors";
+
+/**
+ * Fake processBatch for use in indexMessages tests.
+ * Marks messages as 'done' in SQLite (same as the real processBatch) but
+ * skips OpenAI/LanceDB calls, so tests run without credentials or network.
+ */
+function fakeBatch(db: Database, batch: MessageRow[]): Promise<{ indexed: number; failed: number }> {
+  const ids = batch.map((m) => m.id).join(",");
+  db.run(`UPDATE messages SET embedding_state = 'done' WHERE id IN (${ids})`);
+  return Promise.resolve({ indexed: batch.length, failed: 0 });
+}
 
 function freshDb(): Database {
   return createTestDb();
@@ -161,6 +172,71 @@ describe("hasEmbedding", () => {
 
   it("returns false for a non-existent message_id", () => {
     expect(hasEmbedding(db, "<nonexistent@example.com>")).toBe(false);
+  });
+});
+
+describe("indexMessages — exit condition scenarios", () => {
+  it("exits immediately when sync finds 0 messages (empty queue, syncDone already resolved)", async () => {
+    const db = createTestDb();
+    // No messages inserted — simulates sync that found nothing new
+    const result = await indexMessages({
+      db,
+      syncDone: Promise.resolve(),
+      _processBatch: fakeBatch,
+    });
+    expect(result.indexed).toBe(0);
+    expect(result.failed).toBe(0);
+  });
+
+  it("processes pre-existing messages in standalone mode (no syncDone)", async () => {
+    const db = createTestDb();
+    insertTestMessage(db, { subject: "Pending A" });
+    insertTestMessage(db, { subject: "Pending B" });
+
+    const result = await indexMessages({ db, _processBatch: fakeBatch });
+
+    expect(result.indexed).toBe(2);
+    const remaining = db.query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'pending'").get() as { c: number };
+    expect(remaining.c).toBe(0);
+  });
+
+  it("waits for sync to finish before exiting when queue is initially empty", async () => {
+    const db = createTestDb();
+    let resolveSyncDone!: () => void;
+    const syncDone = new Promise<void>((resolve) => { resolveSyncDone = resolve; });
+
+    // Simulate sync inserting a message and then finishing after a short delay
+    setTimeout(() => {
+      insertTestMessage(db, { subject: "Late arrival" });
+      resolveSyncDone();
+    }, 50);
+
+    const result = await indexMessages({ db, syncDone, _processBatch: fakeBatch });
+
+    expect(result.indexed).toBe(1);
+  });
+
+  it("drains all queued messages before exiting after syncDone resolves", async () => {
+    const db = createTestDb();
+    // Pre-load some messages as if sync already ran partway
+    insertTestMessage(db, { subject: "First batch A" });
+    insertTestMessage(db, { subject: "First batch B" });
+
+    let resolveSyncDone!: () => void;
+    const syncDone = new Promise<void>((resolve) => { resolveSyncDone = resolve; });
+
+    // Resolve sync (and add more messages) after a short delay
+    setTimeout(() => {
+      insertTestMessage(db, { subject: "Second batch A" });
+      insertTestMessage(db, { subject: "Second batch B" });
+      resolveSyncDone();
+    }, 50);
+
+    const result = await indexMessages({ db, syncDone, _processBatch: fakeBatch });
+
+    expect(result.indexed).toBe(4);
+    const pending = db.query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'pending'").get() as { c: number };
+    expect(pending.c).toBe(0);
   });
 });
 
