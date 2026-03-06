@@ -39,6 +39,18 @@ src/
 - **No migrations.** Schema is applied on DB creation. For schema changes: run manual `ALTER TABLE` / SQL against the live DB to save a resync. Full reset (`rm -rf ~/.zmail/data/` + resync) also works. Do not create or maintain migration files.
 - When testing search, **use the standard search interface** (`search(db, { query })` from `~/search`). Do not query the DB directly unless debugging or explicitly asked.
 
+## Processing ztest feedback
+
+The sibling project `../ztest` hosts Claude Code config for manual testing. When agents discover issues, they write feedback files to `../ztest/feedback/`. Process this feedback using the **process-feedback** skill:
+
+1. **Read feedback files** from `../ztest/feedback/*.md`
+2. **Check for duplicates** — search existing bugs (`docs/bugs/`) and opportunities (`docs/opportunities/`)
+3. **Check if fixed** — if feedback matches archived/fixed items, delete the feedback file
+4. **Convert to bugs/opportunities** — create new bug (`docs/bugs/BUG-XXX-*.md`) or opportunity (`docs/opportunities/OPP-XXX-*.md`) files
+5. **Update indexes** — add entries to `docs/BUGS.md` or `docs/OPPORTUNITIES.md`
+
+See `.cursor/skills/process-feedback/SKILL.md` for the complete workflow. The `docs/bugs/` and `docs/opportunities/` directories serve as our issue tracker (Jira replacement).
+
 ## Commands
 
 ```bash
