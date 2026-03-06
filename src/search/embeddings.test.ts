@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 import { prepareTextForEmbedding } from "./embeddings";
 
 // We can't test embedText/embedBatch without an API key, but we can

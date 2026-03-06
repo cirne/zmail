@@ -108,7 +108,7 @@ MCP remains the right interface for remote/hosted deployments where the index li
 
 Both modes hit the same SQLite index. The binary is the same artifact.
 
-**See also:** [OPP-004: People Index and Writable Contacts](opportunities/OPP-004-people-index-contacts.md) — roadmap for people index at index time, `zmail contact`, and MCP who/contact tools.
+**See also:** [OPP-004: People Index and Writable Contacts](opportunities/archive/OPP-004-people-index-contacts.md) — roadmap for people index at index time, `zmail contact`, and MCP who/contact tools.
 
 ---
 
@@ -119,7 +119,7 @@ Both modes hit the same SQLite index. The binary is the same artifact.
 | Layer | Phase 1 + 2 | Phase 3 (hosted SaaS, if ever) |
 |---|---|---|
 | Raw email files | Maildir on persistent volume | S3 / DO Spaces |
-| Structured metadata + FTS | SQLite via `bun:sqlite` | Postgres |
+| Structured metadata + FTS | SQLite via `better-sqlite3` | Postgres |
 | Semantic / vector search | LanceDB embedded on volume | LanceDB → S3 |
 
 **SQLite schema (Phase 1):**
@@ -151,15 +151,14 @@ FTS5 virtual tables on `body_text` and `subject` live in the same `.db` file.
 
 ---
 
-### ADR-008: Language & Runtime — TypeScript + Bun
+### ADR-008: Language & Runtime — TypeScript + Node.js
 
-**Decision:** TypeScript compiled with Bun (`bun build --compile`).
+**Decision:** TypeScript on Node.js 22+. Dev: `tsx` runs source directly; distribution: `tsc` + `tsc-alias` → `dist/`, install via `npm i -g zmail` (see [OPP-007](opportunities/archive/OPP-007-packaging-npm-homebrew.md)).
 
 **Rationale:**
-- `bun build --compile` produces a single self-contained native binary — no runtime required on the user's machine. Distributable via Homebrew, `curl | sh`, GitHub releases.
-- Bun has **built-in SQLite** (`bun:sqlite`) with native bindings — no `better-sqlite3`, no native addon compilation.
-- Fast startup time (comparable to Go) — critical for CLI tool-use where agents shell out on every call.
-- First-class TypeScript without a separate build step in development.
+- Node.js is ubiquitous; no separate runtime (Bun) required. Aligns with OpenClaw/Claude Code (`npm i -g`).
+- **better-sqlite3** for SQLite — stable, no binary bundling issues (e.g. PDF extraction in compiled binary; see BUG-001).
+- `tsx` gives first-class TypeScript in development without a build step.
 - Strong ecosystem for IMAP (`imapflow`) and MCP SDK.
 
 ---
@@ -224,7 +223,7 @@ ImapProvider (interface)
 
 **Decision:** Attachments are captured during sync (raw files written to disk, metadata inserted into DB), and extraction to text happens on-demand when first read. Extracted text is cached in the `attachments.extracted_text` column and reused on subsequent reads. This keeps sync fast while making extracted content immediately available to agents.
 
-**Extraction libraries (TypeScript-native, Bun-compatible):**
+**Extraction libraries (TypeScript-native, Node-compatible):**
 
 | Format | Library | Output | Status |
 |---|---|---|---|
@@ -237,7 +236,7 @@ ImapProvider (interface)
 | Other | — | null | Returns null (unsupported) |
 
 **Library notes:**
-- `@cedrugs/pdf-parse` (fork of pdf-parse v1 API): works in Bun. The original `pdf-parse` v2 depends on `pdfjs-dist` which requires `DOMMatrix` / canvas — not available in Bun.
+- `@cedrugs/pdf-parse` (fork of pdf-parse v1 API): works in Node. The original `pdf-parse` v2 depends on `pdfjs-dist` which requires `DOMMatrix` / canvas — not available in headless Node.
 - `exceljs`: handles real `.xlsx` files correctly. The SheetJS community edition (`xlsx` v0.18.5) cannot parse modern XLSX files.
 - `mammoth`: converts DOCX to markdown natively, best-in-class for Word docs.
 
@@ -309,11 +308,13 @@ sync_summary  (earliest_synced_date, latest_synced_date, total_messages,
 
 ### ADR-014: Web UI — Hono + HTMX, Server-Rendered
 
-**Decision:** The service includes a web UI for onboarding, sync status, and test search. Built with Hono (Bun-native HTTP framework) + HTMX. No client-side build step, no bundler, no framework.
+**Status: Deferred.** The web UI has been removed. CLI and MCP are the supported interfaces. Onboarding is via `zmail setup` and AGENTS.md. If a web UI is reintroduced later, this ADR describes the intended design.
+
+**Decision (historical):** The service was to include a web UI for onboarding, sync status, and test search. Built with Hono (Bun-native HTTP framework) + HTMX. No client-side build step, no bundler, no framework.
 
 **Rationale:** This is a single-user admin UI. Server-rendered HTML with HTMX polling/SSE for live sync status is faster to build and easier to maintain than a React SPA. Hono runs natively on Bun alongside the MCP server — same process, different routes.
 
-**Service surfaces:**
+**Service surfaces (historical):**
 ```
 Single Bun process
 ├── /           Web UI (Hono + HTMX)
@@ -321,29 +322,17 @@ Single Bun process
 └── background  Sync daemon (runs as async task in same process)
 ```
 
-**Onboarding flow (new instance):**
-```
-/setup
-  → Sign in with Google        ← protects UI, establishes OAuth infra
-  → Enter IMAP app password    ← Phase 1 auth
-  → Live sync status view      ← windows progress, earliest date synced
-  → Test search                ← confirm system is working
-/dashboard (configured instances)
-  → Sync status + progress
-  → Search interface
-```
+**Onboarding flow (historical):** `/setup` → Sign in with Google, IMAP app password, live sync status, test search. `/dashboard` → Sync status + search. Current onboarding: `zmail setup` (CLI) and AGENTS.md.
 
 ---
 
 ### ADR-015: Web UI Auth — Google OAuth
 
-**Decision:** The web UI is protected by Google OAuth sign-in.
+**Status: Deferred.** Web UI has been removed; this ADR is retained for context if a web UI is reintroduced.
 
-**Rationale:** Two benefits in one:
-1. Protects the admin UI without requiring a separate password system.
-2. Establishes the Google OAuth app registration and token infrastructure that Phase 2 IMAP auth will reuse. When Gmail OAuth scope is added, the consent screen extends the same flow — no separate OAuth plumbing.
+**Decision (historical):** The web UI was to be protected by Google OAuth sign-in.
 
-**Implementation:** Standard Google OAuth 2.0 PKCE flow. Session stored as a signed cookie. Only the authenticated Google account (the owner) can access the UI.
+**Rationale:** Two benefits in one: (1) Protects the admin UI without a separate password system. (2) Establishes Google OAuth infrastructure for potential Phase 2 IMAP auth. Implementation: standard Google OAuth 2.0 PKCE flow, session as signed cookie.
 
 ---
 
@@ -386,7 +375,7 @@ Single Bun process
 **Decision:** Sync runs **synchronously**. Progress is observable in two ways so agents (or humans) can infer status and speed without introducing a job queue:
 
 1. **Periodic progress to stdout** — During sync, emit progress lines at a regular cadence (e.g. every N messages or every few seconds): messages fetched so far, bytes downloaded, elapsed time, throughput (msg/min). When the run finishes, always emit a final metrics block (messages new/fetched, bytes, bandwidth, msg/min, duration).
-2. **Pollable progress** — Write current-run progress to a well-known place (e.g. a progress file under DATA_DIR or fields in sync_summary / a small table) so another agent or process can poll (e.g. `zmail status` or reading a file) and report status even when the runner does not stream stdout.
+2. **Pollable progress** — Write current-run progress to a well-known place (e.g. a progress file under ZMAIL_HOME/data or fields in sync_summary / a small table) so another agent or process can poll (e.g. `zmail status` or reading a file) and report status even when the runner does not stream stdout.
 
 We do **not** introduce async job IDs or a job queue for sync unless we later need multiple concurrent syncs or very long-running jobs that must outlive a single CLI invocation.
 
@@ -421,7 +410,7 @@ We do **not** introduce async job IDs or a job queue for sync unless we later ne
 **Decision:** `zmail sync` and `zmail refresh` are the user-facing sync commands. Both launch sync and indexing concurrently via `Promise.all` in a single thread:
 
 1. **Sync** (bandwidth-bound): IMAP fetch → write `.eml` to maildir → insert into SQLite with `embedding_state = 'pending'`. Optimized to saturate network bandwidth (ADR-016/017).
-2. **Indexing** (API-rate-bound): Claim pending messages from SQLite → generate embeddings via OpenAI → write to LanceDB → mark `embedding_state = 'done'`. Multiple embedding batches in-flight concurrently. Embedding API responses are cached on disk (by model and input hash) so the same string is not re-embedded. Cache lives under `DATA_DIR/embedding-cache` (or `EMBEDDING_CACHE_PATH`); set `EMBEDDING_CACHE=0` to disable.
+2. **Indexing** (API-rate-bound): Claim pending messages from SQLite → generate embeddings via OpenAI → write to LanceDB → mark `embedding_state = 'done'`. Multiple embedding batches in-flight concurrently. Embedding API responses are cached on disk (by model and input hash) so the same string is not re-embedded. Cache lives under `ZMAIL_HOME/data/embedding-cache` (or `EMBEDDING_CACHE_PATH`); set `EMBEDDING_CACHE=0` to disable.
 
 ```
 zmail sync [--since <spec>]  (backward sync)

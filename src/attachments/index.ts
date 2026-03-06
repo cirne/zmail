@@ -203,7 +203,7 @@ export async function extractAndCache(
 
   // Check DB cache first
   const db = getDb();
-  const existing = db.query("SELECT extracted_text FROM attachments WHERE id = ?").get(attachmentId) as
+  const existing = db.prepare("SELECT extracted_text FROM attachments WHERE id = ?").get(attachmentId) as
     | { extracted_text: string | null }
     | undefined;
   if (existing && existing.extracted_text) {
@@ -217,7 +217,7 @@ export async function extractAndCache(
     const sizeMB = (existsSync(rawPath) ? readFileSync(rawPath).length : 0) / (1024 * 1024);
     const stubText = `[Binary attachment: ${filename}, ${sizeMB.toFixed(2)} MB — no text extraction available]`;
     // Update DB with stub
-    db.run("UPDATE attachments SET extracted_text = ? WHERE id = ?", [stubText, attachmentId]);
+    db.prepare("UPDATE attachments SET extracted_text = ? WHERE id = ?").run(stubText, attachmentId);
     return { text: stubText, convertedPath };
   }
 
@@ -226,7 +226,7 @@ export async function extractAndCache(
   const extracted = await extractor.extract(rawBuffer, filename);
 
   // Update DB (but don't write sibling file yet - pending accuracy validation)
-  db.run("UPDATE attachments SET extracted_text = ? WHERE id = ?", [extracted.text, attachmentId]);
+  db.prepare("UPDATE attachments SET extracted_text = ? WHERE id = ?").run(extracted.text, attachmentId);
 
   return { text: extracted.text, convertedPath };
 }

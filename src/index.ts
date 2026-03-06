@@ -4,7 +4,10 @@
 import { CLI_USAGE } from "~/lib/onboarding";
 import { hasConfig } from "~/lib/config";
 
-const [, , command, ...args] = process.argv;
+// When run as "tsx src/index.ts -- <command>", argv[2] is "--" and argv[3] is the command
+const rest = process.argv.slice(2);
+const command = rest[0] === "--" ? rest[1] : rest[0];
+const args = rest[0] === "--" ? rest.slice(2) : rest.slice(1);
 
 /** Emit onboarding hint on stderr and exit 1 when failure is due to missing config. */
 function handleMissingConfig(err: unknown): never {

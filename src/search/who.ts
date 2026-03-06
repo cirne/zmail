@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { SqliteDatabase } from "~/db";
 import type { WhoPerson, WhoResult } from "~/lib/types";
 
 export interface WhoOptions {
@@ -17,7 +17,7 @@ const DEFAULT_LIMIT = 50;
  * messages. When ownerAddress is set: sent = emails I sent to them, received = emails from them to me, mentioned = emails where they were in to/cc but not the sender.
  * When ownerAddress is not set (e.g. tests): sent = emails they sent, received = emails where they are in to/cc, mentioned = 0.
  */
-export function who(db: Database, opts: WhoOptions): WhoResult {
+export function who(db: SqliteDatabase, opts: WhoOptions): WhoResult {
   const { query, limit = DEFAULT_LIMIT, minSent = 0, minReceived = 0, ownerAddress } = opts;
   const pattern = `%${query.trim().toLowerCase()}%`;
 
@@ -60,7 +60,7 @@ export function who(db: Database, opts: WhoOptions): WhoResult {
   if (ownerAddress) {
     // sent = I sent to P; received = P sent to me; mentioned = P in to/cc and not sender
     rows = db
-      .query(
+      .prepare(
         /* sql */ `
       WITH ${baseCtes},
       counted AS (
@@ -90,7 +90,7 @@ export function who(db: Database, opts: WhoOptions): WhoResult {
   } else {
     // Legacy: sent = they sent, received = they're in to/cc, mentioned = 0
     rows = db
-      .query(
+      .prepare(
         /* sql */ `
       WITH ${baseCtes},
       counted AS (

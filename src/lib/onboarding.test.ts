@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 import {
   CLI_USAGE,
   ONBOARDING_HINT_MISSING_ENV,

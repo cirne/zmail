@@ -85,5 +85,5 @@ const res = await fetch("http://localhost:11434/api/embeddings", {
 ## Open questions
 
 - Does `@huggingface/transformers` ONNX runtime bundle correctly into a `bun build --compile` binary? Needs a quick spike to verify before committing to this path. Fall back to Ollama if not.
-- Cache model in `DATA_DIR` instead of `~/.cache` so it travels with the deployment volume? Or document the HuggingFace cache location so users know where it lives.
+- Cache model in `ZMAIL_HOME/data` (or similar) instead of `~/.cache` so it travels with the deployment volume? Or document the HuggingFace cache location so users know where it lives.
 - Should OpenAI remain as a configurable option (env var `EMBEDDING_PROVIDER=openai|local`) for users who prefer it?

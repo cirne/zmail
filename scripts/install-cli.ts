@@ -1,42 +1,52 @@
-#!/usr/bin/env bun
-// Build the native binary and copy it to a directory on your PATH for testing
-// from another workspace (e.g. a separate Claude Code project).
+#!/usr/bin/env node
+// Install a wrapper script that runs zmail via `npx tsx src/index.ts` so the
+// CLI uses the source tree (avoids compiled-binary issues e.g. PDF extraction).
 //
-// Usage: bun run scripts/install-cli.ts
+// Usage: npm run install-cli  (or: npx tsx scripts/install-cli.ts)
 //
 // Default install dir: ~/.local/bin (override with ZMAIL_INSTALL_DIR).
 // Ensure that directory is on your PATH so the installed `zmail` is found.
+//
+// The wrapper runs: npx tsx <projectRoot>/src/index.ts -- "$@"
 
-import { chmodSync, cpSync, mkdirSync, existsSync } from "fs";
+import { writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
-import { $ } from "bun";
 
-const projectRoot = join(import.meta.dir, "..");
-const distBinary = join(projectRoot, "dist", "zmail");
+const projectRoot = join(import.meta.dirname, "..");
 
 const installDir =
   process.env.ZMAIL_INSTALL_DIR ||
   join(process.env.HOME || "", ".local", "bin");
 const destPath = join(installDir, "zmail");
 
-console.log("Building...");
-await $`bun build src/index.ts --compile --outfile dist/zmail`.cwd(projectRoot);
-
-if (!existsSync(distBinary)) {
-  console.error("Build failed: dist/zmail not found");
-  process.exit(1);
+// Escape for safe use inside single-quoted bash string
+function escapeForBash(path: string): string {
+  return path.replace(/\\/g, "\\\\").replace(/'/g, "'\\''");
 }
+
+const repoPath = escapeForBash(projectRoot);
+const wrapper = `#!/usr/bin/env bash
+set -e
+ZMAIL_REPO='${repoPath}'
+cd "$ZMAIL_REPO" && exec npx tsx src/index.ts "$@"
+`;
 
 mkdirSync(installDir, { recursive: true });
-cpSync(distBinary, destPath);
-chmodSync(destPath, 0o755);
+writeFileSync(destPath, wrapper, { mode: 0o755 });
 
-console.log(`Installed zmail → ${destPath}`);
+console.log(`Installed zmail (source wrapper) → ${destPath}`);
 console.log("");
-console.log("To use from another directory (e.g. another Claude Code project):");
-console.log("  1. Ensure the install dir is on your PATH:");
+console.log("The wrapper runs: npx tsx <repo>/src/index.ts <args>");
+console.log("Repo path: " + projectRoot);
+console.log("");
+console.log("To use from another directory:");
 if (!process.env.PATH?.includes(installDir)) {
+  console.log("  1. Ensure the install dir is on your PATH:");
   console.log(`     export PATH="${installDir}:$PATH"`);
+  console.log("  2. From that directory, run: zmail <command>");
+} else {
+  console.log("  Run: zmail <command>");
 }
-console.log("  2. From that directory, run: zmail <command>");
-console.log("     (It will use ./data in the current working directory, or set DATA_DIR.)");
+console.log("  (Config and data dir: ~/.zmail by default, or set ZMAIL_HOME.)");
+console.log("");
+console.log("To reinstall after moving the repo, run install-cli again from the new path.");

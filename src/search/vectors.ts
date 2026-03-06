@@ -99,11 +99,11 @@ export async function searchVectors(
  * Uses SQLite embedding_state as the source of truth.
  */
 export function hasEmbedding(
-  db: import("bun:sqlite").Database,
+  db: import("~/db").SqliteDatabase,
   messageId: string,
 ): boolean {
   const row = db
-    .query(
+    .prepare(
       "SELECT 1 FROM messages WHERE message_id = ? AND embedding_state = 'done'",
     )
     .get(messageId);

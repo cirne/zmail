@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeEach } from "bun:test";
-import type { Database } from "bun:sqlite";
+import { describe, it, expect, beforeEach } from "vitest";
+import type { SqliteDatabase } from "~/db";
 import { createTestDb, insertTestMessage } from "~/db/test-helpers";
 import { search, searchWithMeta } from "./index";
 
 describe("search", () => {
-  let db: Database;
+  let db: SqliteDatabase;
 
   beforeEach(() => {
     db = createTestDb();

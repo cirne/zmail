@@ -22,9 +22,12 @@ export interface ParsedMessage {
 }
 
 export async function parseRawMessage(raw: Buffer): Promise<ParsedMessage> {
-  // postal-mime is stream-free and works correctly in Bun (unlike mailparser's
-  // Writable-based MailParser, whose _write callback is never invoked in Bun).
-  const email = await PostalMime.parse(raw.buffer as ArrayBuffer);
+  // postal-mime expects an ArrayBuffer. In Node, Buffer is a Uint8Array view; .buffer
+  // may be shared and have a non-zero byteOffset. Copy to a plain ArrayBuffer so
+  // PostalMime receives exactly the message bytes (and to satisfy ArrayBuffer type).
+  const copy = new Uint8Array(raw.byteLength);
+  copy.set(raw);
+  const email = await PostalMime.parse(copy.buffer);
 
   const messageId = email.messageId ?? `<unknown-${Date.now()}@local>`;
   const date = email.date ? new Date(email.date).toISOString() : new Date().toISOString();

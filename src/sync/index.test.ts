@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach } from "bun:test";
-import type { Database } from "bun:sqlite";
+import { describe, it, expect, beforeEach } from "vitest";
+import type { SqliteDatabase } from "~/db";
 import { createTestDb, insertTestMessage } from "~/db/test-helpers";
 
 describe("runSync logic", () => {
-  let db: Database;
+  let db: SqliteDatabase;
   const mailbox = "[Gmail]/All Mail";
 
   beforeEach(() => {
@@ -22,13 +22,12 @@ describe("runSync logic", () => {
 
     it("should filter UIDs > last_uid from search results", () => {
       // Setup: we've synced up to UID 100
-      db.run(
-        "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)",
-        [mailbox, 1, 100]
-      );
+      db.prepare(
+        "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)"
+      ).run(mailbox, 1, 100);
 
       const state = db
-        .query("SELECT last_uid FROM sync_state WHERE folder = ?")
+        .prepare("SELECT last_uid FROM sync_state WHERE folder = ?")
         .get(mailbox) as { last_uid: number } | undefined;
 
       expect(state?.last_uid).toBe(100);
@@ -43,11 +42,12 @@ describe("runSync logic", () => {
 
     it("should handle forward sync when no checkpoint exists", () => {
       // No sync_state row - should fall back to date-based search
+      // better-sqlite3 .get() returns undefined when no row (not null)
       const state = db
-        .query("SELECT last_uid FROM sync_state WHERE folder = ?")
-        .get(mailbox) as { last_uid: number } | null;
+        .prepare("SELECT last_uid FROM sync_state WHERE folder = ?")
+        .get(mailbox) as { last_uid: number } | undefined;
 
-      expect(state).toBeNull();
+      expect(state).toBeUndefined();
       // Without checkpoint, forward sync should use date-based search
     });
   });
@@ -56,16 +56,15 @@ describe("runSync logic", () => {
     it("resumes from oldest synced date when extending date range", () => {
       // Setup: we've synced messages from 2026-02-24
       const oldestDate = "2026-02-24T08:44:52.000Z";
-      db.run(
+      db.prepare(
         `INSERT INTO messages
          (message_id, thread_id, folder, uid, from_address, to_addresses, cc_addresses, subject, body_text, date, raw_path)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ["msg1@test.com", "thread-1", mailbox, 100, "sender@test.com", "[]", "[]", "Test", "Body", oldestDate, "maildir/test.eml"]
-      );
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run("msg1@test.com", "thread-1", mailbox, 100, "sender@test.com", "[]", "[]", "Test", "Body", oldestDate, "maildir/test.eml");
 
       // Verify oldest date is tracked
       const oldest = db
-        .query("SELECT MIN(date) as oldest_date FROM messages WHERE folder = ?")
+        .prepare("SELECT MIN(date) as oldest_date FROM messages WHERE folder = ?")
         .get(mailbox) as { oldest_date: string | null };
       
       expect(oldest?.oldest_date).toBeTruthy();
@@ -74,10 +73,9 @@ describe("runSync logic", () => {
 
     it("filters UIDs <= last_uid to skip already-synced messages", () => {
       // Setup: we've synced up to UID 100
-      db.run(
-        "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)",
-        [mailbox, 1, 100]
-      );
+      db.prepare(
+        "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)"
+      ).run(mailbox, 1, 100);
 
       // Simulate search returning UIDs that include already-synced ones
       const searchResults = [98, 99, 100, 101, 102];
@@ -88,10 +86,9 @@ describe("runSync logic", () => {
     });
 
     it("skips fetching when all UIDs are already synced", () => {
-      db.run(
-        "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)",
-        [mailbox, 1, 100]
-      );
+      db.prepare(
+        "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)"
+      ).run(mailbox, 1, 100);
 
       // All UIDs <= last_uid
       const uids = [98, 99, 100];
@@ -103,15 +100,14 @@ describe("runSync logic", () => {
 
     it("allows same-day re-fetch to catch gaps from interrupted syncs", () => {
       // Setup: we've synced some messages from 2026-02-24
-      db.run(
+      db.prepare(
         `INSERT INTO messages
          (message_id, thread_id, folder, uid, from_address, to_addresses, cc_addresses, subject, body_text, date, raw_path)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ["msg1@test.com", "thread-1", mailbox, 100, "sender@test.com", "[]", "[]", "Test", "Body", "2026-02-24T08:44:52.000Z", "maildir/test.eml"]
-      );
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run("msg1@test.com", "thread-1", mailbox, 100, "sender@test.com", "[]", "[]", "Test", "Body", "2026-02-24T08:44:52.000Z", "maildir/test.eml");
 
       const oldest = db
-        .query("SELECT MIN(date) as oldest_date FROM messages WHERE folder = ?")
+        .prepare("SELECT MIN(date) as oldest_date FROM messages WHERE folder = ?")
         .get(mailbox) as { oldest_date: string | null };
 
       const oldestDateStr = oldest?.oldest_date?.slice(0, 10); // YYYY-MM-DD
@@ -124,13 +120,12 @@ describe("runSync logic", () => {
 
   describe("UID checkpointing", () => {
     it("tracks last_uid per folder", () => {
-      db.run(
-        "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)",
-        [mailbox, 1, 100]
-      );
+      db.prepare(
+        "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)"
+      ).run(mailbox, 1, 100);
 
       const state = db
-        .query("SELECT uidvalidity, last_uid FROM sync_state WHERE folder = ?")
+        .prepare("SELECT uidvalidity, last_uid FROM sync_state WHERE folder = ?")
         .get(mailbox) as { uidvalidity: number; last_uid: number } | undefined;
 
       expect(state).toBeDefined();
@@ -154,13 +149,12 @@ describe("runSync logic", () => {
 
     it("handles uidvalidity mismatch (requires full resync)", () => {
       // Setup: old checkpoint with different uidvalidity
-      db.run(
-        "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)",
-        [mailbox, 1, 100]
-      );
+      db.prepare(
+        "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)"
+      ).run(mailbox, 1, 100);
 
       const state = db
-        .query("SELECT uidvalidity FROM sync_state WHERE folder = ?")
+        .prepare("SELECT uidvalidity FROM sync_state WHERE folder = ?")
         .get(mailbox) as { uidvalidity: number } | undefined;
 
       const currentUidValidity = 2; // Changed (mailbox was recreated)
@@ -185,7 +179,7 @@ describe("runSync logic", () => {
       });
 
       const oldest = db
-        .query("SELECT MIN(date) as oldest_date FROM messages WHERE folder = ?")
+        .prepare("SELECT MIN(date) as oldest_date FROM messages WHERE folder = ?")
         .get(mailbox) as { oldest_date: string | null };
 
       expect(oldest?.oldest_date).toBe("2026-02-20T10:00:00.000Z");
@@ -203,15 +197,14 @@ describe("runSync logic", () => {
     });
 
     it("resumes from oldest date when requested date is newer", () => {
-      db.run(
+      db.prepare(
         `INSERT INTO messages
          (message_id, thread_id, folder, uid, from_address, to_addresses, cc_addresses, subject, body_text, date, raw_path)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ["msg1@test.com", "thread-1", mailbox, 50, "sender@test.com", "[]", "[]", "Test", "Body", "2026-02-20T10:00:00.000Z", "maildir/test.eml"]
-      );
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run("msg1@test.com", "thread-1", mailbox, 50, "sender@test.com", "[]", "[]", "Test", "Body", "2026-02-20T10:00:00.000Z", "maildir/test.eml");
 
       const oldest = db
-        .query("SELECT MIN(date) as oldest_date FROM messages WHERE folder = ?")
+        .prepare("SELECT MIN(date) as oldest_date FROM messages WHERE folder = ?")
         .get(mailbox) as { oldest_date: string | null };
 
       const oldestDateStr = oldest?.oldest_date?.slice(0, 10);
@@ -263,17 +256,15 @@ describe("runSync logic", () => {
   describe("backward sync re-search logic", () => {
     it("should re-search with 'before' constraint when all UIDs are synced", () => {
       // Setup: we've synced all messages from 2026-02-24
-      db.run(
-        "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)",
-        [mailbox, 1, 100]
-      );
+      db.prepare(
+        "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)"
+      ).run(mailbox, 1, 100);
 
-      db.run(
+      db.prepare(
         `INSERT INTO messages
          (message_id, thread_id, folder, uid, from_address, to_addresses, cc_addresses, subject, body_text, date, raw_path)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ["msg1@test.com", "thread-1", mailbox, 100, "sender@test.com", "[]", "[]", "Test", "Body", "2026-02-24T10:00:00.000Z", "maildir/test.eml"]
-      );
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run("msg1@test.com", "thread-1", mailbox, 100, "sender@test.com", "[]", "[]", "Test", "Body", "2026-02-24T10:00:00.000Z", "maildir/test.eml");
 
       // Simulate search returning UIDs that are all <= last_uid
       const searchResults = [98, 99, 100];

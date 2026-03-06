@@ -6,7 +6,7 @@
  * Uses PID-based lock to prevent concurrent indexing runs.
  */
 
-import type { Database } from "bun:sqlite";
+import type { SqliteDatabase } from "~/db";
 import { getDb } from "~/db";
 import { logger } from "~/lib/logger";
 import { config } from "~/lib/config";
@@ -46,10 +46,10 @@ export interface MessageRow {
 /**
  * Atomically claim a batch of pending messages.
  */
-export function claimBatch(db: Database, size: number): MessageRow[] {
+export function claimBatch(db: SqliteDatabase, size: number): MessageRow[] {
   return db.transaction(() => {
     const rows = db
-      .query(
+      .prepare(
         `SELECT id, message_id, subject, body_text, from_address, date
          FROM messages
          WHERE embedding_state = 'pending'
@@ -60,7 +60,7 @@ export function claimBatch(db: Database, size: number): MessageRow[] {
 
     if (rows.length > 0) {
       const ids = rows.map((r) => r.id).join(",");
-      db.run(
+      db.exec(
         `UPDATE messages SET embedding_state = 'claimed' WHERE id IN (${ids})`
       );
     }
@@ -69,20 +69,20 @@ export function claimBatch(db: Database, size: number): MessageRow[] {
   })();
 }
 
-export function isSyncRunning(db: Database): boolean {
+export function isSyncRunning(db: SqliteDatabase): boolean {
   const row = db
-    .query("SELECT is_running FROM sync_summary WHERE id = 1")
+    .prepare("SELECT is_running FROM sync_summary WHERE id = 1")
     .get() as { is_running: number } | null;
   return row?.is_running === 1;
 }
 
-export function resetStaleClaims(db: Database): number {
+export function resetStaleClaims(db: SqliteDatabase): number {
   const row = db
-    .query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'claimed'")
+    .prepare("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'claimed'")
     .get() as { c: number };
   const count = row.c;
   if (count > 0) {
-    db.run(
+    db.exec(
       `UPDATE messages SET embedding_state = 'pending' WHERE embedding_state = 'claimed'`
     );
     logger.info("Reset stale claims", { count });
@@ -94,7 +94,7 @@ export function resetStaleClaims(db: Database): number {
  * Process a single batch: embed via OpenAI, batch-insert to LanceDB, update SQLite.
  */
 async function processBatch(
-  db: Database,
+  db: SqliteDatabase,
   batch: MessageRow[],
 ): Promise<{ indexed: number; failed: number }> {
   const texts = batch.map((m) =>
@@ -122,10 +122,9 @@ async function processBatch(
     // Use parameterized query instead of string interpolation
     const ids = batch.map((m) => m.id);
     const placeholders = ids.map(() => "?").join(",");
-    db.run(
-      `UPDATE messages SET embedding_state = 'done' WHERE id IN (${placeholders})`,
-      ids
-    );
+    db.prepare(
+      `UPDATE messages SET embedding_state = 'done' WHERE id IN (${placeholders})`
+    ).run(...ids);
 
     return { indexed: batch.length, failed: 0 };
   } catch (err) {
@@ -150,10 +149,9 @@ async function processBatch(
       try {
         const ids = batch.map((m) => m.id);
         const placeholders = ids.map(() => "?").join(",");
-        db.run(
-          `UPDATE messages SET embedding_state = 'done' WHERE id IN (${placeholders})`,
-          ids
-        );
+        db.prepare(
+          `UPDATE messages SET embedding_state = 'done' WHERE id IN (${placeholders})`
+        ).run(...ids);
         logger.warn("Recovered from UPDATE failure after embeddings were added", {
           batchSize: batch.length,
         });
@@ -171,10 +169,9 @@ async function processBatch(
       // Embeddings weren't added, so mark as failed
       const ids = batch.map((m) => m.id);
       const placeholders = ids.map(() => "?").join(",");
-      db.run(
-        `UPDATE messages SET embedding_state = 'failed' WHERE id IN (${placeholders})`,
-        ids
-      );
+      db.prepare(
+        `UPDATE messages SET embedding_state = 'failed' WHERE id IN (${placeholders})`
+      ).run(...ids);
       return { indexed: 0, failed: batch.length };
     }
   }
@@ -196,12 +193,12 @@ export async function indexMessages(options?: {
    * For testing: inject a DB instance instead of calling getDb().
    * Also bypasses the OPENAI_API_KEY check when provided alongside _processBatch.
    */
-  db?: Database;
+  db?: SqliteDatabase;
   /**
    * For testing: replace the real processBatch (which calls OpenAI + LanceDB)
    * with a fake that returns immediately. When provided, skips the API key check.
    */
-  _processBatch?: (db: Database, batch: MessageRow[]) => Promise<{ indexed: number; failed: number }>;
+  _processBatch?: (db: SqliteDatabase, batch: MessageRow[]) => Promise<{ indexed: number; failed: number }>;
 }): Promise<IndexingResult> {
   if (!config.openai.apiKey && !options?._processBatch) {
     logger.warn("OPENAI_API_KEY not set, skipping indexing");
@@ -224,7 +221,7 @@ export async function indexMessages(options?: {
 
   resetStaleClaims(db);
 
-  db.run(
+  db.exec(
     `UPDATE indexing_status SET
       total_to_index = (SELECT COUNT(*) FROM messages WHERE embedding_state = 'pending'),
       indexed_so_far = 0,
@@ -272,10 +269,9 @@ export async function indexMessages(options?: {
         totalFailed += result.failed;
 
         // Update progress
-        db.run(
-          `UPDATE indexing_status SET indexed_so_far = ? WHERE id = 1`,
-          [totalIndexed]
-        );
+        db.prepare(
+          `UPDATE indexing_status SET indexed_so_far = ? WHERE id = 1`
+        ).run(totalIndexed);
 
         inFlight.delete(batchPromise);
       }).catch((err) => {
@@ -330,13 +326,12 @@ export async function indexMessages(options?: {
     }
   }
 
-  db.run(
+  db.prepare(
     `UPDATE indexing_status SET
       indexed_so_far = ?,
       completed_at = datetime('now')
-    WHERE id = 1`,
-    [totalIndexed],
-  );
+    WHERE id = 1`
+  ).run(totalIndexed);
 
   releaseLock(db, "indexing_status");
 

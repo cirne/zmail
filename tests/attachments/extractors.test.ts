@@ -1,9 +1,9 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { extractAttachment } from "~/attachments";
 
-const FIXTURES = join(import.meta.dir, "fixtures");
+const FIXTURES = join(import.meta.dirname, "fixtures");
 
 function fixture(name: string): Buffer {
   return readFileSync(join(FIXTURES, name));

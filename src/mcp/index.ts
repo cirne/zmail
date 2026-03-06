@@ -51,7 +51,7 @@ export function createMcpServer() {
     async ({ messageId }) => {
       const db = getDb();
       const attachments = db
-        .query(
+        .prepare(
           `SELECT id, filename, mime_type, size, stored_path, extracted_text
            FROM attachments WHERE message_id = ? ORDER BY filename`
         )
@@ -94,7 +94,7 @@ export function createMcpServer() {
     async ({ attachmentId }) => {
       const db = getDb();
       const attachment = db
-        .query("SELECT id, message_id, filename, mime_type, size, stored_path FROM attachments WHERE id = ?")
+        .prepare("SELECT id, message_id, filename, mime_type, size, stored_path FROM attachments WHERE id = ?")
         .get(attachmentId) as
         | {
             id: number;
@@ -158,7 +158,7 @@ export function createMcpServer() {
       const { formatMessageLlmFriendly } = await import("~/cli/format-message");
       
       const message = db
-        .query("SELECT * FROM messages WHERE message_id = ?")
+        .prepare("SELECT * FROM messages WHERE message_id = ?")
         .get(messageId) as any | undefined;
       
       if (!message) {

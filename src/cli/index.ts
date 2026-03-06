@@ -10,13 +10,16 @@ import { parseSinceToDate } from "~/sync/parse-since";
 import { htmlToMarkdown } from "~/lib/content-normalize";
 import { parseRawMessage } from "~/sync/parse-message";
 import type { SearchResult } from "~/lib/types";
-import type { Database } from "bun:sqlite";
+import type { SqliteDatabase } from "~/db";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { formatMessageLlmFriendly } from "~/cli/format-message";
 import { extractAndCache } from "~/attachments";
 
-const [, , command, ...args] = process.argv;
+// When invoked as "tsx index.ts -- <cmd>", argv[2] is "--" and argv[3] is the command
+const rest = process.argv.slice(2);
+const command = rest[0] === "--" ? rest[1] : rest[0];
+const args = rest[0] === "--" ? rest.slice(2) : rest.slice(1);
 
 type SearchDetail = "headers" | "snippet" | "body";
 type SearchField =
@@ -54,6 +57,14 @@ const DEFAULT_HEADER_FIELDS: SearchField[] = [
 ];
 const JSON_LIMIT_CAP = 100;
 const JSON_BYTE_CAP = 64 * 1024;
+
+/** Normalize message_id/thread_id for DB lookup: stored format includes angle brackets; accept with or without. */
+function normalizeMessageId(id: string): string {
+  const trimmed = id.trim();
+  if (!trimmed) return id;
+  if (trimmed.startsWith("<") && trimmed.endsWith(">")) return trimmed;
+  return `<${trimmed}>`;
+}
 
 interface ParsedSearchArgs {
   query: string;
@@ -306,12 +317,12 @@ function defaultFieldsForDetail(detail: SearchDetail): SearchField[] {
   return DEFAULT_HEADER_FIELDS;
 }
 
-function hydrateBodies(db: Database, results: SearchResult[]): Array<SearchResult & { body: string }> {
+function hydrateBodies(db: SqliteDatabase, results: SearchResult[]): Array<SearchResult & { body: string }> {
   if (results.length === 0) return [];
   const ids = results.map((r) => r.messageId);
   const placeholders = ids.map(() => "?").join(",");
   const rows = db
-    .query(
+    .prepare(
       `SELECT message_id AS messageId, body_text AS body FROM messages WHERE message_id IN (${placeholders})`
     )
     .all(...ids) as Array<{ messageId: string; body: string }>;
@@ -440,7 +451,7 @@ function readRawEmail(rawPath: string): Buffer | null {
 export async function formatMessageForOutput(message: MessageRow, raw: boolean): Promise<Record<string, unknown>> {
   const db = getDb();
   const attachments = db
-    .query(
+    .prepare(
       `SELECT id, filename, mime_type, size, stored_path, extracted_text
        FROM attachments WHERE message_id = ? ORDER BY filename`
     )
@@ -745,9 +756,10 @@ async function main() {
       }
 
       const db = getDb();
+      const threadId = normalizeMessageId(parsed.id);
       const messages = db
-        .query("SELECT * FROM messages WHERE thread_id = ? ORDER BY date ASC")
-        .all(parsed.id) as MessageRow[];
+        .prepare("SELECT * FROM messages WHERE thread_id = ? ORDER BY date ASC")
+        .all(threadId) as MessageRow[];
       const shaped = await Promise.all(messages.map((m) => formatMessageForOutput(m, parsed.raw)));
       console.log(JSON.stringify(shaped, null, 2));
       break;
@@ -765,9 +777,10 @@ async function main() {
       }
 
       const db = getDb();
+      const messageId = normalizeMessageId(parsed.id);
       const message = db
-        .query("SELECT * FROM messages WHERE message_id = ?")
-        .get(parsed.id) as MessageRow | undefined;
+        .prepare("SELECT * FROM messages WHERE message_id = ?")
+        .get(messageId) as MessageRow | undefined;
       if (!message) {
         console.log("null");
         break;
@@ -829,14 +842,14 @@ async function main() {
 
     case "status": {
       const db = getDb();
-      const syncStatus = db.query("SELECT * FROM sync_summary WHERE id = 1").get() as {
+      const syncStatus = db.prepare("SELECT * FROM sync_summary WHERE id = 1").get() as {
         earliest_synced_date: string | null;
         latest_synced_date: string | null;
         total_messages: number;
         last_sync_at: string | null;
         is_running: number;
       };
-      const indexStatus = db.query("SELECT * FROM indexing_status WHERE id = 1").get() as {
+      const indexStatus = db.prepare("SELECT * FROM indexing_status WHERE id = 1").get() as {
         is_running: number;
         total_to_index: number;
         indexed_so_far: number;
@@ -854,8 +867,8 @@ async function main() {
       }
 
       // Indexing status - always use messages table as source of truth
-      const totalIndexed = db.query("SELECT COUNT(*) as count FROM messages WHERE embedding_state = 'done'").get() as { count: number };
-      const totalFailed = db.query("SELECT COUNT(*) as count FROM messages WHERE embedding_state = 'failed'").get() as { count: number };
+      const totalIndexed = db.prepare("SELECT COUNT(*) as count FROM messages WHERE embedding_state = 'done'").get() as { count: number };
+      const totalFailed = db.prepare("SELECT COUNT(*) as count FROM messages WHERE embedding_state = 'failed'").get() as { count: number };
       
       if (indexStatus.is_running) {
         const elapsed = indexStatus.started_at
@@ -879,17 +892,17 @@ async function main() {
 
     case "stats": {
       const db = getDb();
-      const total = db.query("SELECT COUNT(*) as count FROM messages").get() as { count: number };
-      const dateRange = db.query("SELECT MIN(date) as earliest, MAX(date) as latest FROM messages").get() as
+      const total = db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number };
+      const dateRange = db.prepare("SELECT MIN(date) as earliest, MAX(date) as latest FROM messages").get() as
         | { earliest: string | null; latest: string | null }
         | undefined;
       const topSenders = db
-        .query(
+        .prepare(
           "SELECT from_address, COUNT(*) as count FROM messages GROUP BY from_address ORDER BY count DESC LIMIT 10"
         )
         .all() as Array<{ from_address: string; count: number }>;
       const folderBreakdown = db
-        .query("SELECT folder, COUNT(*) as count FROM messages GROUP BY folder ORDER BY count DESC")
+        .prepare("SELECT folder, COUNT(*) as count FROM messages GROUP BY folder ORDER BY count DESC")
         .all() as Array<{ folder: string; count: number }>;
 
       console.log("Database Statistics\n");
@@ -918,15 +931,16 @@ async function main() {
 
       const subcommand = args[0];
       if (subcommand === "list") {
-        const messageId = args[1];
-        if (!messageId) {
+        const messageIdArg = args[1];
+        if (!messageIdArg) {
           console.error("Usage: zmail attachment list <message_id>");
           process.exit(1);
         }
 
         const db = getDb();
+        const messageId = normalizeMessageId(messageIdArg);
         const attachments = db
-          .query(
+          .prepare(
             `SELECT id, filename, mime_type, size, stored_path, extracted_text
              FROM attachments WHERE message_id = ? ORDER BY filename`
           )
@@ -993,7 +1007,7 @@ async function main() {
 
         const db = getDb();
         const attachment = db
-          .query("SELECT id, message_id, filename, mime_type, size, stored_path FROM attachments WHERE id = ?")
+          .prepare("SELECT id, message_id, filename, mime_type, size, stored_path FROM attachments WHERE id = ?")
           .get(attachmentId) as
           | {
               id: number;

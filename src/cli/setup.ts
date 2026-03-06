@@ -1,3 +1,4 @@
+import { spawn } from "child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { createInterface } from "readline";
@@ -359,16 +360,14 @@ ZMAIL_OPENAI_API_KEY=${apiKey}
       console.log(`\nStarting sync in background (--since ${syncSince})...`);
       
       // Find the entrypoint script path relative to project root
-      // import.meta.dir is src/cli/, so go up to src/ then use index.ts
-      const entrypointScript = join(import.meta.dir, "..", "index.ts");
+      // import.meta.dirname is src/cli/, so go up to src/ then use index.ts
+      const entrypointScript = join(import.meta.dirname, "..", "index.ts");
       
       // Spawn detached process - redirect output so it doesn't interfere with setup
-      const proc = Bun.spawn({
-        cmd: ["bun", "run", entrypointScript, "sync", "--since", syncSince],
+      const proc = spawn("npx", ["tsx", entrypointScript, "sync", "--since", syncSince], {
         cwd: process.cwd(),
         env: { ...process.env, ZMAIL_HOME: process.env.ZMAIL_HOME || ZMAIL_HOME },
-        stdout: "pipe", // Don't inherit - let it run silently in background
-        stderr: "pipe",
+        stdio: "pipe",
         detached: true,
       });
       

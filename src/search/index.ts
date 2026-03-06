@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { SqliteDatabase } from "~/db";
 import type { SearchResult } from "~/lib/types";
 import { embedText } from "./embeddings";
 import { searchVectors } from "./vectors";
@@ -43,7 +43,7 @@ function fromFilterPattern(value: string): string {
 /**
  * Filter-only search (no query text, just WHERE clauses).
  */
-function filterOnlySearch(db: Database, opts: SearchOptions): SearchResult[] {
+function filterOnlySearch(db: SqliteDatabase, opts: SearchOptions): SearchResult[] {
   const { limit = 20, offset = 0, fromAddress, toAddress, subject, afterDate, beforeDate, filterOr } = opts;
   const conditions: string[] = [];
   const params: (string | number)[] = [];
@@ -80,7 +80,7 @@ function filterOnlySearch(db: Database, opts: SearchOptions): SearchResult[] {
   params.push(limit, offset);
   const where = `WHERE ${conditions.join(filterOr ? " OR " : " AND ")}`;
   const rows = db
-    .query(
+    .prepare(
       /* sql */ `
       SELECT
         m.message_id   AS messageId,
@@ -104,7 +104,7 @@ function filterOnlySearch(db: Database, opts: SearchOptions): SearchResult[] {
 /**
  * FTS5 search (keyword matching via BM25).
  */
-function ftsSearch(db: Database, opts: SearchOptions): SearchResult[] {
+function ftsSearch(db: SqliteDatabase, opts: SearchOptions): SearchResult[] {
   const { query, limit = 20, offset = 0, fromAddress, toAddress, subject, afterDate, beforeDate } = opts;
   if (!query?.trim()) return [];
 
@@ -138,7 +138,7 @@ function ftsSearch(db: Database, opts: SearchOptions): SearchResult[] {
   params.push(limit + offset + 50);
 
   const rows = db
-    .query(
+    .prepare(
       /* sql */ `
       SELECT
         m.message_id  AS messageId,
@@ -183,7 +183,7 @@ function ftsSearch(db: Database, opts: SearchOptions): SearchResult[] {
  * Semantic/vector search.
  */
 async function vectorSearchFromEmbedding(
-  db: Database,
+  db: SqliteDatabase,
   opts: SearchOptions,
   queryEmbedding: number[]
 ): Promise<SearchResult[]> {
@@ -227,7 +227,7 @@ async function vectorSearchFromEmbedding(
 
   // Fetch messages and preserve vector search order
   const messages = db
-    .query(
+    .prepare(
       /* sql */ `
       SELECT
         m.message_id  AS messageId,
@@ -259,7 +259,7 @@ async function vectorSearchFromEmbedding(
   return sorted.map(({ bodyText, ...rest }) => rest);
 }
 
-async function vectorSearch(db: Database, opts: SearchOptions): Promise<SearchResult[]> {
+async function vectorSearch(db: SqliteDatabase, opts: SearchOptions): Promise<SearchResult[]> {
   const { query } = opts;
   if (!query?.trim()) return [];
   const queryEmbedding = await embedText(query);
@@ -273,7 +273,7 @@ interface VectorSearchRun {
 }
 
 async function vectorSearchWithTimings(
-  db: Database,
+  db: SqliteDatabase,
   opts: SearchOptions
 ): Promise<VectorSearchRun> {
   const { query } = opts;
@@ -370,13 +370,13 @@ function generateSnippet(text: string, query: string, contextLength: number = 10
  * Unified search function with mode selection.
  * For filter-only queries (no query text), returns plain SQL results.
  */
-export async function search(db: Database, opts: SearchOptions): Promise<SearchResult[]> {
+export async function search(db: SqliteDatabase, opts: SearchOptions): Promise<SearchResult[]> {
   const result = await searchWithMeta(db, opts);
   return result.results;
 }
 
 export async function searchWithMeta(
-  db: Database,
+  db: SqliteDatabase,
   opts: SearchOptions
 ): Promise<SearchResultSet> {
   const startedAt = Date.now();
@@ -489,11 +489,11 @@ export async function searchWithMeta(
 }
 
 // Legacy exports for backwards compatibility (deprecated, will be removed)
-export async function semanticSearch(db: Database, opts: SearchOptions): Promise<SearchResult[]> {
+export async function semanticSearch(db: SqliteDatabase, opts: SearchOptions): Promise<SearchResult[]> {
   return vectorSearch(db, opts);
 }
 
-export async function hybridSearch(db: Database, opts: SearchOptions): Promise<SearchResult[]> {
+export async function hybridSearch(db: SqliteDatabase, opts: SearchOptions): Promise<SearchResult[]> {
   const result = await searchWithMeta(db, { ...opts, mode: "hybrid" });
   return result.results;
 }

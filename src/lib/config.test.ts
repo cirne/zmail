@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { config, hasConfig } from "./config";
 import { join } from "path";
 import { existsSync, mkdirSync, writeFileSync, unlinkSync, rmSync } from "fs";

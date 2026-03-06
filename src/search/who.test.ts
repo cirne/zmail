@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach } from "bun:test";
-import type { Database } from "bun:sqlite";
+import { describe, it, expect, beforeEach } from "vitest";
+import type { SqliteDatabase } from "~/db";
 import { createTestDb, insertTestMessage } from "~/db/test-helpers";
 import { who } from "./who";
 
 /** Insert a message with full control over from/to/cc for who() tests. */
 function insertMessage(
-  db: Database,
+  db: SqliteDatabase,
   opts: {
     messageId: string;
     fromAddress: string;
@@ -23,16 +23,15 @@ function insertMessage(
   const subject = opts.subject ?? "Test";
   const date = opts.date ?? new Date().toISOString();
 
-  db.run(
+  db.prepare(
     `INSERT INTO messages
        (message_id, thread_id, folder, uid, from_address, from_name, to_addresses, cc_addresses, subject, body_text, date, raw_path)
-     VALUES (?, ?, '[Gmail]/All Mail', 1, ?, ?, ?, ?, ?, '', ?, 'maildir/test.eml')`,
-    [messageId, threadId, opts.fromAddress, opts.fromName ?? null, to, cc, subject, date]
-  );
+     VALUES (?, ?, '[Gmail]/All Mail', 1, ?, ?, ?, ?, ?, '', ?, 'maildir/test.eml')`
+  ).run(messageId, threadId, opts.fromAddress, opts.fromName ?? null, to, cc, subject, date);
 }
 
 describe("who", () => {
-  let db: Database;
+  let db: SqliteDatabase;
 
   beforeEach(() => {
     db = createTestDb();

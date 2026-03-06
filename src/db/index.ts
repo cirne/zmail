@@ -1,11 +1,13 @@
-import { Database } from "bun:sqlite";
+import Database from "better-sqlite3";
 import { mkdirSync } from "fs";
 import { dirname } from "path";
 import { config } from "~/lib/config";
 import { logger } from "~/lib/logger";
 import { SCHEMA } from "./schema";
 
-let _db: Database | null = null;
+export type SqliteDatabase = InstanceType<typeof Database>;
+
+let _db: SqliteDatabase | null = null;
 
 interface SchemaColumnRequirement {
   table: string;
@@ -44,9 +46,9 @@ export interface MissingSchemaColumn {
   column: string;
 }
 
-function tableExists(db: Database, tableName: string): boolean {
+function tableExists(db: SqliteDatabase, tableName: string): boolean {
   const row = db
-    .query(
+    .prepare(
       "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1"
     )
     .get(tableName);
@@ -57,14 +59,14 @@ function tableExists(db: Database, tableName: string): boolean {
  * Detect required columns that are missing from existing tables.
  * We only check tables that already exist, so brand-new DBs can bootstrap normally.
  */
-export function detectMissingSchemaColumns(db: Database): MissingSchemaColumn[] {
+export function detectMissingSchemaColumns(db: SqliteDatabase): MissingSchemaColumn[] {
   const missing: MissingSchemaColumn[] = [];
 
   for (const req of REQUIRED_SCHEMA_COLUMNS) {
     if (!tableExists(db, req.table)) continue;
 
     const cols = db
-      .query(`PRAGMA table_info(${req.table})`)
+      .prepare(`PRAGMA table_info(${req.table})`)
       .all() as Array<{ name: string }>;
     const hasColumn = cols.some((c) => c.name === req.column);
     if (!hasColumn) {
@@ -92,17 +94,17 @@ export function formatSchemaDriftError(
   ].join("\n");
 }
 
-export function getDb(): Database {
+export function getDb(): SqliteDatabase {
   if (_db) return _db;
 
   mkdirSync(dirname(config.dbPath), { recursive: true });
 
-  _db = new Database(config.dbPath, { create: true });
-  _db.run("PRAGMA journal_mode = WAL");
-  _db.run("PRAGMA foreign_keys = ON");
-  _db.run("PRAGMA synchronous = NORMAL");
+  _db = new Database(config.dbPath);
+  _db.exec("PRAGMA journal_mode = WAL");
+  _db.exec("PRAGMA foreign_keys = ON");
+  _db.exec("PRAGMA synchronous = NORMAL");
   // Allow wait up to 15s for lock (workers and sync share the DB; avoids "database is locked")
-  _db.run("PRAGMA busy_timeout = 15000");
+  _db.exec("PRAGMA busy_timeout = 15000");
 
   const missingColumns = detectMissingSchemaColumns(_db);
   if (missingColumns.length > 0) {
@@ -111,13 +113,13 @@ export function getDb(): Database {
     throw new Error(driftMessage);
   }
 
-  _db.run(SCHEMA);
+  _db.exec(SCHEMA);
 
   // Ensure singleton status rows exist
-  _db.run(
+  _db.exec(
     "INSERT OR IGNORE INTO sync_summary (id, total_messages) VALUES (1, 0)"
   );
-  _db.run(
+  _db.exec(
     "INSERT OR IGNORE INTO indexing_status (id) VALUES (1)"
   );
 

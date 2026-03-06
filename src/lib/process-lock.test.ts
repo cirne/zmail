@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from "bun:test";
-import type { Database } from "bun:sqlite";
+import { describe, it, expect, beforeEach } from "vitest";
+import type { SqliteDatabase } from "~/db";
 import { createTestDb } from "~/db/test-helpers";
 import { isProcessAlive, acquireLock, releaseLock } from "./process-lock";
 
@@ -15,7 +15,7 @@ describe("isProcessAlive", () => {
 });
 
 describe("acquireLock", () => {
-  let db: Database;
+  let db: SqliteDatabase;
 
   beforeEach(() => {
     db = createTestDb();
@@ -26,7 +26,7 @@ describe("acquireLock", () => {
     expect(result.acquired).toBe(true);
     expect(result.takenOver).toBe(false);
 
-    const row = db.query("SELECT is_running, owner_pid FROM sync_summary WHERE id = 1").get() as {
+    const row = db.prepare("SELECT is_running, owner_pid FROM sync_summary WHERE id = 1").get() as {
       is_running: number;
       owner_pid: number;
     };
@@ -48,20 +48,20 @@ describe("acquireLock", () => {
     const deadPid = 1_073_741_824;
 
     // Simulate a crashed process holding the lock
-    db.run("UPDATE sync_summary SET is_running = 1, owner_pid = ? WHERE id = 1", [deadPid]);
+    db.prepare("UPDATE sync_summary SET is_running = 1, owner_pid = ? WHERE id = 1").run(deadPid);
 
     const result = acquireLock(db, "sync_summary", process.pid);
     expect(result.acquired).toBe(true);
     expect(result.takenOver).toBe(true);
 
-    const row = db.query("SELECT owner_pid FROM sync_summary WHERE id = 1").get() as {
+    const row = db.prepare("SELECT owner_pid FROM sync_summary WHERE id = 1").get() as {
       owner_pid: number;
     };
     expect(row.owner_pid).toBe(process.pid);
   });
 
   it("acquires lock when is_running=1 but owner_pid is null (legacy crash)", () => {
-    db.run("UPDATE indexing_status SET is_running = 1, owner_pid = NULL WHERE id = 1");
+    db.exec("UPDATE indexing_status SET is_running = 1, owner_pid = NULL WHERE id = 1");
 
     const result = acquireLock(db, "indexing_status", process.pid);
     expect(result.acquired).toBe(true);
@@ -77,7 +77,7 @@ describe("acquireLock", () => {
 });
 
 describe("releaseLock", () => {
-  let db: Database;
+  let db: SqliteDatabase;
 
   beforeEach(() => {
     db = createTestDb();
@@ -87,7 +87,7 @@ describe("releaseLock", () => {
     acquireLock(db, "sync_summary", process.pid);
     releaseLock(db, "sync_summary");
 
-    const row = db.query("SELECT is_running, owner_pid FROM sync_summary WHERE id = 1").get() as {
+    const row = db.prepare("SELECT is_running, owner_pid FROM sync_summary WHERE id = 1").get() as {
       is_running: number;
       owner_pid: number | null;
     };

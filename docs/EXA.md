@@ -68,7 +68,7 @@ zmail search "competitor pricing changes" --mode=enriched
 
 ## 3. Contact/Entity Enrichment at Sync Time
 
-Every email has a sender domain (and often a display name). During sync, zmail could enrich identities so `zmail who` and contact lookups return web-derived context without an extra agent round-trip. This aligns with the people/contacts work in [OPP-004: People Index and Writable Contacts](opportunities/OPP-004-people-index-contacts.md) — the extended contacts (or people/people_emails) schema is the natural place to store Exa-derived fields.
+Every email has a sender domain (and often a display name). During sync, zmail could enrich identities so `zmail who` and contact lookups return web-derived context without an extra agent round-trip. This aligns with the people/contacts work in [OPP-004: People Index and Writable Contacts](opportunities/archive/OPP-004-people-index-contacts.md) — the extended contacts (or people/people_emails) schema is the natural place to store Exa-derived fields.
 
 **Low-hanging fruit (domain-only):**
 
@@ -167,4 +167,4 @@ The pattern is always the same: **zmail has corpus context the agent doesn't, an
 
 ## See also
 
-- [OPP-004: People Index and Writable Contacts](opportunities/OPP-004-people-index-contacts.md) — `zmail who`, people index at index time, and `zmail contact` for writable metadata. Exa contact/entity enrichment (above) is the web-enrichment layer for that same people/contacts model.
+- [OPP-004: People Index and Writable Contacts](opportunities/archive/OPP-004-people-index-contacts.md) — `zmail who`, people index at index time, and `zmail contact` for writable metadata. Exa contact/entity enrichment (above) is the web-enrichment layer for that same people/contacts model.

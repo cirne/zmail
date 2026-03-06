@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach } from "bun:test";
-import type { Database } from "bun:sqlite";
+import { describe, it, expect, beforeEach } from "vitest";
+import type { SqliteDatabase } from "./index";
 import { createTestDb, insertTestMessage } from "./test-helpers";
 
 describe("database schema", () => {
-  let db: Database;
+  let db: SqliteDatabase;
 
   beforeEach(() => {
     db = createTestDb();
@@ -12,7 +12,7 @@ describe("database schema", () => {
   describe("tables", () => {
     it("creates all expected tables", () => {
       const tables = db
-        .query(
+        .prepare(
           "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         )
         .all() as { name: string }[];
@@ -30,7 +30,7 @@ describe("database schema", () => {
 
     it("creates messages_fts virtual table", () => {
       const vtables = db
-        .query(
+        .prepare(
           "SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'"
         )
         .all() as { name: string }[];
@@ -39,7 +39,7 @@ describe("database schema", () => {
 
     it("pre-seeds the sync_summary singleton row", () => {
       const row = db
-        .query("SELECT * FROM sync_summary WHERE id = 1")
+        .prepare("SELECT * FROM sync_summary WHERE id = 1")
         .get() as { id: number; total_messages: number } | null;
       expect(row).not.toBeNull();
       expect(row!.total_messages).toBe(0);
@@ -47,7 +47,7 @@ describe("database schema", () => {
 
     it("pre-seeds the indexing_status singleton row", () => {
       const row = db
-        .query("SELECT * FROM indexing_status WHERE id = 1")
+        .prepare("SELECT * FROM indexing_status WHERE id = 1")
         .get() as { id: number; is_running: number; indexed_so_far: number } | null;
       expect(row).not.toBeNull();
       expect(row!.is_running).toBe(0);
@@ -56,7 +56,7 @@ describe("database schema", () => {
 
     it("indexing_status has expected columns", () => {
       const cols = db
-        .query("PRAGMA table_info(indexing_status)")
+        .prepare("PRAGMA table_info(indexing_status)")
         .all() as { name: string }[];
       const names = cols.map((c) => c.name);
       expect(names).toContain("is_running");
@@ -71,7 +71,7 @@ describe("database schema", () => {
 
     it("sync_summary has owner_pid column", () => {
       const cols = db
-        .query("PRAGMA table_info(sync_summary)")
+        .prepare("PRAGMA table_info(sync_summary)")
         .all() as { name: string }[];
       const names = cols.map((c) => c.name);
       expect(names).toContain("owner_pid");
@@ -80,7 +80,7 @@ describe("database schema", () => {
 
     it("messages has embedding_state column", () => {
       const cols = db
-        .query("PRAGMA table_info(messages)")
+        .prepare("PRAGMA table_info(messages)")
         .all() as { name: string }[];
       const names = cols.map((c) => c.name);
       expect(names).toContain("embedding_state");
@@ -95,7 +95,7 @@ describe("database schema", () => {
       });
 
       const row = db
-        .query("SELECT * FROM messages WHERE message_id = ?")
+        .prepare("SELECT * FROM messages WHERE message_id = ?")
         .get(messageId) as { subject: string; from_address: string } | null;
 
       expect(row).not.toBeNull();
@@ -116,7 +116,7 @@ describe("database schema", () => {
       insertTestMessage(db, { subject: "Invoice from Stripe" });
 
       const results = db
-        .query("SELECT message_id FROM messages_fts WHERE messages_fts MATCH 'Invoice'")
+        .prepare("SELECT message_id FROM messages_fts WHERE messages_fts MATCH 'Invoice'")
         .all();
       expect(results.length).toBe(1);
     });
@@ -124,10 +124,10 @@ describe("database schema", () => {
     it("removes a message from FTS on delete", () => {
       const messageId = insertTestMessage(db, { subject: "Temporary email" });
 
-      db.run("DELETE FROM messages WHERE message_id = ?", [messageId]);
+      db.prepare("DELETE FROM messages WHERE message_id = ?").run(messageId);
 
       const results = db
-        .query(
+        .prepare(
           "SELECT message_id FROM messages_fts WHERE messages_fts MATCH 'Temporary'"
         )
         .all();
@@ -137,19 +137,17 @@ describe("database schema", () => {
     it("updates FTS index when message is updated", () => {
       const messageId = insertTestMessage(db, { subject: "Old subject" });
 
-      db.run("UPDATE messages SET subject = 'New subject' WHERE message_id = ?", [
-        messageId,
-      ]);
+      db.prepare("UPDATE messages SET subject = 'New subject' WHERE message_id = ?").run(messageId);
 
       const old = db
-        .query(
+        .prepare(
           "SELECT message_id FROM messages_fts WHERE messages_fts MATCH 'Old'"
         )
         .all();
       expect(old.length).toBe(0);
 
       const updated = db
-        .query(
+        .prepare(
           "SELECT message_id FROM messages_fts WHERE messages_fts MATCH 'New'"
         )
         .all();
@@ -161,26 +159,26 @@ describe("database schema", () => {
     it("defaults to 'pending' on message insert", () => {
       const messageId = insertTestMessage(db, { subject: "New email" });
       const row = db
-        .query("SELECT embedding_state FROM messages WHERE message_id = ?")
+        .prepare("SELECT embedding_state FROM messages WHERE message_id = ?")
         .get(messageId) as { embedding_state: string };
       expect(row.embedding_state).toBe("pending");
     });
 
     it("can transition through claim → done lifecycle", () => {
       const messageId = insertTestMessage(db);
-      db.run("UPDATE messages SET embedding_state = 'claimed' WHERE message_id = ?", [messageId]);
-      let row = db.query("SELECT embedding_state FROM messages WHERE message_id = ?").get(messageId) as { embedding_state: string };
+      db.prepare("UPDATE messages SET embedding_state = 'claimed' WHERE message_id = ?").run(messageId);
+      let row = db.prepare("SELECT embedding_state FROM messages WHERE message_id = ?").get(messageId) as { embedding_state: string };
       expect(row.embedding_state).toBe("claimed");
 
-      db.run("UPDATE messages SET embedding_state = 'done' WHERE message_id = ?", [messageId]);
-      row = db.query("SELECT embedding_state FROM messages WHERE message_id = ?").get(messageId) as { embedding_state: string };
+      db.prepare("UPDATE messages SET embedding_state = 'done' WHERE message_id = ?").run(messageId);
+      row = db.prepare("SELECT embedding_state FROM messages WHERE message_id = ?").get(messageId) as { embedding_state: string };
       expect(row.embedding_state).toBe("done");
     });
 
     it("can be marked as 'failed'", () => {
       const messageId = insertTestMessage(db);
-      db.run("UPDATE messages SET embedding_state = 'failed' WHERE message_id = ?", [messageId]);
-      const row = db.query("SELECT embedding_state FROM messages WHERE message_id = ?").get(messageId) as { embedding_state: string };
+      db.prepare("UPDATE messages SET embedding_state = 'failed' WHERE message_id = ?").run(messageId);
+      const row = db.prepare("SELECT embedding_state FROM messages WHERE message_id = ?").get(messageId) as { embedding_state: string };
       expect(row.embedding_state).toBe("failed");
     });
   });
@@ -188,7 +186,7 @@ describe("database schema", () => {
   describe("indexes", () => {
     it("creates expected indexes", () => {
       const indexes = db
-        .query(
+        .prepare(
           "SELECT name FROM sqlite_master WHERE type='index' ORDER BY name"
         )
         .all() as { name: string }[];

@@ -1,30 +1,30 @@
 ---
 name: install-cli
-description: Build and install the zmail CLI binary to a directory on PATH for testing from other workspaces. Use when you need to test the compiled binary from another directory or project.
+description: Install a zmail wrapper script to a directory on PATH so you can run `zmail` from any directory (e.g. other workspaces). The wrapper runs the source via `npx tsx` — no compiled binary.
 ---
 
 # CLI installation (dev time)
 
 ## Principle
 
-Builds the native binary and installs it to a directory on your PATH so you can use `zmail` from any directory, including other workspaces or Claude Code projects.
+Installs a small wrapper script at `~/.local/bin/zmail` (or `ZMAIL_INSTALL_DIR`) that runs `npx tsx <repo>/src/index.ts -- "$@"`. You can then run `zmail` from any directory; config is still read from `~/.zmail/`.
 
 ## What it does
 
-1. **Builds** the native binary using `bun build --compile` → `dist/zmail`
-2. **Installs** the binary to `~/.local/bin/zmail` (or `ZMAIL_INSTALL_DIR` if set)
-3. **Makes executable** (`chmod +x`)
-4. **Provides instructions** for ensuring the install directory is on PATH
+1. **Writes** a bash script to `~/.local/bin/zmail` (or `ZMAIL_INSTALL_DIR`)
+2. The script **exec**s `npx tsx "$ZMAIL_REPO/src/index.ts" -- "$@"` (repo path is embedded at install time)
+3. **Creates** the install directory if needed and sets the script executable (755)
+4. **Prints** instructions for PATH and reinstall-after-move
 
 ## Usage
 
 ```bash
-bun run install-cli
+npm run install-cli
 ```
 
-Or via npm script:
+Or directly:
 ```bash
-bun run install-cli
+npx tsx scripts/install-cli.ts
 ```
 
 ## Install location
@@ -32,7 +32,7 @@ bun run install-cli
 - **Default:** `~/.local/bin/zmail`
 - **Override:** Set `ZMAIL_INSTALL_DIR` environment variable to install elsewhere
   ```bash
-  ZMAIL_INSTALL_DIR=/usr/local/bin bun run install-cli
+  ZMAIL_INSTALL_DIR=/usr/local/bin npm run install-cli
   ```
 
 ## PATH setup
@@ -47,23 +47,19 @@ Add this to your shell profile (`~/.zshrc`, `~/.bashrc`, etc.) to make it perman
 
 ## When to use
 
-- **Testing from another workspace** — Install the binary so you can run `zmail` commands from a different directory
-- **After code changes** — Rebuild and reinstall after modifying CLI code to test the compiled binary
+- **Testing from another workspace** — Install the wrapper so you can run `zmail` from a different directory
+- **After moving the repo** — Run `npm run install-cli` again from the new path to update the embedded repo path
 - **Cross-project testing** — Use zmail CLI from other Claude Code projects or workspaces
-- **Binary verification** — Test that the compiled binary works correctly outside the dev environment
 
 ## How it works
 
 The script (`scripts/install-cli.ts`):
-1. Compiles `src/index.ts` to a native binary at `dist/zmail`
-2. Creates the install directory if it doesn't exist
-3. Copies the binary to the install location
-4. Sets executable permissions (755)
-5. Prints installation path and PATH setup instructions
+1. Resolves the project root (from `import.meta.dirname`)
+2. Writes a bash script that sets `ZMAIL_REPO` to that path and runs `npx tsx "$ZMAIL_REPO/src/index.ts" -- "$@"`
+3. Creates the install directory if it doesn't exist and makes the script executable (755)
 
 ## Notes
 
-- The installed binary is **standalone** — it doesn't depend on the source code or node_modules
-- The binary uses the **current working directory** for data (or `DATA_DIR` env var)
-- Config is read from `~/.zmail/config.json` and `~/.zmail/.env` (or `ZMAIL_HOME` if set)
-- Re-running `install-cli` overwrites the previous installation
+- The installed **wrapper** runs the **source** via tsx — it requires Node.js and the repo (or a copy) at the path used when you ran install-cli
+- Config and data dir are under **ZMAIL_HOME** (default `~/.zmail`): `config.json`, `.env`, and `data/` (DB, maildir, vectors). Override with the `ZMAIL_HOME` env var only; there is no `DATA_DIR`.
+- For a **standalone** install (no repo), use `npm run build` then `npm i -g .` so the `zmail` bin runs `dist/index.js` with Node

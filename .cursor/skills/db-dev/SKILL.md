@@ -12,15 +12,15 @@ description: Reset and manage the local SQLite database and data dir at dev time
 ## Where data lives
 
 - **Root:** `ZMAIL_HOME/data` (default `~/.zmail/data`, derived from `os.homedir()`). Config is in `~/.zmail/config.json` and `~/.zmail/.env` (see AGENTS.md).
-- **DB:** `DATA_DIR/zmail.db` (and WAL files `-shm`, `-wal`).
-- **Maildir:** `DATA_DIR/maildir/` (raw .eml in `cur/`, `new/`, `tmp/`).
+- **DB:** `ZMAIL_HOME/data/zmail.db` (and WAL files `-shm`, `-wal`). Default ZMAIL_HOME is `~/.zmail`.
+- **Maildir:** `ZMAIL_HOME/data/maildir/` (raw .eml in `cur/`, `new/`, `tmp/`).
 - **Sync state:** Stored inside the DB (`sync_state`, `sync_summary`).
 
 ## Reset commands
 
 **Full reset (preferred when blowing away corrupt or DB-dependent data):**
 
-Deletes the DB and all filesystem data under `DATA_DIR` (maildir, WAL files, etc.). Use this whenever the DB is being replaced so that nothing on disk is left that depends on the old DB (e.g. maildir `.eml` paths referenced by `messages.raw_path`, or orphaned files).
+Deletes the DB and all filesystem data under `ZMAIL_HOME/data` (maildir, WAL files, etc.). Use this whenever the DB is being replaced so that nothing on disk is left that depends on the old DB (e.g. maildir `.eml` paths referenced by `messages.raw_path`, or orphaned files).
 
 ```bash
 rm -rf ~/.zmail/data/

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
+import { fileURLToPath } from "url";
 import { ImapFlow } from "imapflow";
 import { config, requireImapConfig } from "~/lib/config";
 import { getDb } from "~/db";
@@ -151,7 +152,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
       
       // Incremental sync (ADR-003): use UID range search when we have a checkpoint
       // This avoids fetching all UIDs since a date and filtering client-side
-      const stateRow = db.query("SELECT uidvalidity, last_uid FROM sync_state WHERE folder = ?").get(mailbox) as
+      const stateRow = db.prepare("SELECT uidvalidity, last_uid FROM sync_state WHERE folder = ?").get(mailbox) as
         | { uidvalidity: number | bigint; last_uid: number | bigint }
         | undefined;
       // Normalize to numbers (SQLite may return BigInt)
@@ -179,7 +180,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
         
         if (direction === 'backward') {
           // Find the oldest message we've already synced
-          const oldestSynced = db.query("SELECT MIN(date) as oldest_date FROM messages WHERE folder = ?").get(mailbox) as
+          const oldestSynced = db.prepare("SELECT MIN(date) as oldest_date FROM messages WHERE folder = ?").get(mailbox) as
             | { oldest_date: string | null }
             | undefined;
           
@@ -270,7 +271,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
         if (allUidsAreSynced) {
           // All UIDs from this search are already synced - we've completed this day
           // Search for messages before the oldest synced date instead
-          const oldestSynced = db.query("SELECT MIN(date) as oldest_date FROM messages WHERE folder = ?").get(mailbox) as
+          const oldestSynced = db.prepare("SELECT MIN(date) as oldest_date FROM messages WHERE folder = ?").get(mailbox) as
             | { oldest_date: string | null }
             | undefined;
           
@@ -324,7 +325,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
       uids.sort((a, b) => b - a); // Highest UID = most recent
 
       if (uids.length === 0) {
-        db.run("UPDATE sync_summary SET last_sync_at = datetime('now') WHERE id = 1");
+        db.exec("UPDATE sync_summary SET last_sync_at = datetime('now') WHERE id = 1");
         releaseLock(db, "sync_summary");
         const durationMs = Date.now() - startTime;
         const result: SyncResult = {
@@ -409,7 +410,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
           }
 
           const duplicateCheckStart = Date.now();
-          const existing = db.query("SELECT 1 FROM messages WHERE message_id = ?").get(parsed.messageId);
+          const existing = db.prepare("SELECT 1 FROM messages WHERE message_id = ?").get(parsed.messageId);
           const duplicateCheckDuration = Date.now() - duplicateCheckStart;
           
           if (existing) {
@@ -434,33 +435,31 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
 
           const threadId = parsed.messageId;
           const labelsJson = JSON.stringify(labelsArr);
-          db.run(
+          db.prepare(
             `INSERT INTO messages (
               message_id, thread_id, folder, uid, labels, from_address, from_name,
               to_addresses, cc_addresses, subject, date, body_text, raw_path, embedding_state
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-            [
-              parsed.messageId,
-              threadId,
-              mailbox,
-              uid,
-              labelsJson,
-              parsed.fromAddress,
-              parsed.fromName,
-              JSON.stringify(parsed.toAddresses),
-              JSON.stringify(parsed.ccAddresses),
-              parsed.subject,
-              parsed.date,
-              parsed.bodyText,
-              relPath,
-            ]
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`
+          ).run(
+            parsed.messageId,
+            threadId,
+            mailbox,
+            uid,
+            labelsJson,
+            parsed.fromAddress,
+            parsed.fromName,
+            JSON.stringify(parsed.toAddresses),
+            JSON.stringify(parsed.ccAddresses),
+            parsed.subject,
+            parsed.date,
+            parsed.bodyText,
+            relPath,
           );
 
-          db.run(
+          db.prepare(
             `INSERT OR REPLACE INTO threads (thread_id, subject, participant_count, message_count, last_message_at)
-             VALUES (?, ?, 1, 1, ?)`,
-            [threadId, parsed.subject, parsed.date]
-          );
+             VALUES (?, ?, 1, 1, ?)`
+          ).run(threadId, parsed.subject, parsed.date);
 
           // Process attachments
           if (parsed.attachments.length > 0) {
@@ -473,11 +472,10 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
               writeFileSync(attachmentPath, att.content, "binary");
 
               const storedPath = join("attachments", parsed.messageId, uniqueFilename);
-              db.run(
+              db.prepare(
                 `INSERT INTO attachments (message_id, filename, mime_type, size, stored_path, extracted_text)
-                 VALUES (?, ?, ?, ?, ?, NULL)`,
-                [parsed.messageId, att.filename, att.mimeType, att.size, storedPath]
-              );
+                 VALUES (?, ?, ?, ?, ?, NULL)`
+              ).run(parsed.messageId, att.filename, att.mimeType, att.size, storedPath);
             }
           }
 
@@ -502,22 +500,20 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
         const batchMaxUid = Math.max(...batch);
         if (batchMaxUid > checkpointUid) {
           checkpointUid = batchMaxUid;
-          db.run(
-            "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)",
-            [mailbox, uidvalidity, checkpointUid]
-          );
+          db.prepare(
+            "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)"
+          ).run(mailbox, uidvalidity, checkpointUid);
         }
       }
 
-      db.run(
+      db.prepare(
         `UPDATE sync_summary SET
           earliest_synced_date = COALESCE(?, earliest_synced_date),
           latest_synced_date = COALESCE(?, latest_synced_date),
           total_messages = (SELECT COUNT(*) FROM messages),
           last_sync_at = datetime('now')
-         WHERE id = 1`,
-        [earliestDate, latestDate]
-      );
+         WHERE id = 1`
+      ).run(earliestDate, latestDate);
       releaseLock(db, "sync_summary");
 
       const durationMs = Date.now() - startTime;
@@ -547,7 +543,8 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
   }
 }
 
-if (import.meta.main) {
+const __filename = fileURLToPath(import.meta.url);
+if (process.argv[1] && resolve(process.argv[1]) === resolve(__filename)) {
   runSync().catch((err) => {
     logger.error(err instanceof Error ? err.message : String(err));
     process.exit(1);

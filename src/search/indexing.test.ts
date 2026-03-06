@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from "bun:test";
-import type { Database } from "bun:sqlite";
+import { describe, it, expect, beforeEach } from "vitest";
+import type { SqliteDatabase } from "~/db";
 import { createTestDb, insertTestMessage } from "~/db/test-helpers";
 import { claimBatch, resetStaleClaims, isSyncRunning, indexMessages, type MessageRow } from "./indexing";
 import { hasEmbedding } from "./vectors";
@@ -9,18 +9,18 @@ import { hasEmbedding } from "./vectors";
  * Marks messages as 'done' in SQLite (same as the real processBatch) but
  * skips OpenAI/LanceDB calls, so tests run without credentials or network.
  */
-function fakeBatch(db: Database, batch: MessageRow[]): Promise<{ indexed: number; failed: number }> {
+function fakeBatch(db: SqliteDatabase, batch: MessageRow[]): Promise<{ indexed: number; failed: number }> {
   const ids = batch.map((m) => m.id).join(",");
-  db.run(`UPDATE messages SET embedding_state = 'done' WHERE id IN (${ids})`);
+  db.exec(`UPDATE messages SET embedding_state = 'done' WHERE id IN (${ids})`);
   return Promise.resolve({ indexed: batch.length, failed: 0 });
 }
 
-function freshDb(): Database {
+function freshDb(): SqliteDatabase {
   return createTestDb();
 }
 
 describe("claimBatch", () => {
-  let db: Database;
+  let db: SqliteDatabase;
 
   beforeEach(() => {
     db = freshDb();
@@ -39,7 +39,7 @@ describe("claimBatch", () => {
     expect(batch[0].message_id).toBe(mid);
 
     const row = db
-      .query("SELECT embedding_state FROM messages WHERE message_id = ?")
+      .prepare("SELECT embedding_state FROM messages WHERE message_id = ?")
       .get(mid) as { embedding_state: string };
     expect(row.embedding_state).toBe("claimed");
   });
@@ -53,7 +53,7 @@ describe("claimBatch", () => {
     expect(batch.length).toBe(3);
 
     const remaining = db
-      .query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'pending'")
+      .prepare("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'pending'")
       .get() as { c: number };
     expect(remaining.c).toBe(2);
   });
@@ -75,8 +75,8 @@ describe("claimBatch", () => {
     const failed = insertTestMessage(db, { subject: "Failed" });
     const pending = insertTestMessage(db, { subject: "Pending" });
 
-    db.run("UPDATE messages SET embedding_state = 'done' WHERE message_id = ?", [done]);
-    db.run("UPDATE messages SET embedding_state = 'failed' WHERE message_id = ?", [failed]);
+    db.prepare("UPDATE messages SET embedding_state = 'done' WHERE message_id = ?").run(done);
+    db.prepare("UPDATE messages SET embedding_state = 'failed' WHERE message_id = ?").run(failed);
 
     const batch = claimBatch(db, 10);
     expect(batch.length).toBe(1);
@@ -105,13 +105,13 @@ describe("resetStaleClaims", () => {
   it("resets 'claimed' messages back to 'pending'", () => {
     const db = freshDb();
     const mid = insertTestMessage(db);
-    db.run("UPDATE messages SET embedding_state = 'claimed' WHERE message_id = ?", [mid]);
+    db.prepare("UPDATE messages SET embedding_state = 'claimed' WHERE message_id = ?").run(mid);
 
     const count = resetStaleClaims(db);
     expect(count).toBe(1);
 
     const row = db
-      .query("SELECT embedding_state FROM messages WHERE message_id = ?")
+      .prepare("SELECT embedding_state FROM messages WHERE message_id = ?")
       .get(mid) as { embedding_state: string };
     expect(row.embedding_state).toBe("pending");
   });
@@ -121,14 +121,14 @@ describe("resetStaleClaims", () => {
     const done = insertTestMessage(db, { subject: "Done" });
     const failed = insertTestMessage(db, { subject: "Failed" });
 
-    db.run("UPDATE messages SET embedding_state = 'done' WHERE message_id = ?", [done]);
-    db.run("UPDATE messages SET embedding_state = 'failed' WHERE message_id = ?", [failed]);
+    db.prepare("UPDATE messages SET embedding_state = 'done' WHERE message_id = ?").run(done);
+    db.prepare("UPDATE messages SET embedding_state = 'failed' WHERE message_id = ?").run(failed);
 
     const count = resetStaleClaims(db);
     expect(count).toBe(0);
 
-    const doneRow = db.query("SELECT embedding_state FROM messages WHERE message_id = ?").get(done) as { embedding_state: string };
-    const failedRow = db.query("SELECT embedding_state FROM messages WHERE message_id = ?").get(failed) as { embedding_state: string };
+    const doneRow = db.prepare("SELECT embedding_state FROM messages WHERE message_id = ?").get(done) as { embedding_state: string };
+    const failedRow = db.prepare("SELECT embedding_state FROM messages WHERE message_id = ?").get(failed) as { embedding_state: string };
     expect(doneRow.embedding_state).toBe("done");
     expect(failedRow.embedding_state).toBe("failed");
   });
@@ -142,7 +142,7 @@ describe("resetStaleClaims", () => {
 });
 
 describe("hasEmbedding", () => {
-  let db: Database;
+  let db: SqliteDatabase;
 
   beforeEach(() => {
     db = createTestDb();
@@ -155,7 +155,7 @@ describe("hasEmbedding", () => {
 
   it("returns true for a message with embedding_state = 'done'", () => {
     const mid = insertTestMessage(db);
-    db.run("UPDATE messages SET embedding_state = 'done' WHERE message_id = ?", [mid]);
+    db.prepare("UPDATE messages SET embedding_state = 'done' WHERE message_id = ?").run(mid);
     expect(hasEmbedding(db, mid)).toBe(true);
   });
 
@@ -163,8 +163,8 @@ describe("hasEmbedding", () => {
     const claimed = insertTestMessage(db, { subject: "Claimed" });
     const failed = insertTestMessage(db, { subject: "Failed" });
 
-    db.run("UPDATE messages SET embedding_state = 'claimed' WHERE message_id = ?", [claimed]);
-    db.run("UPDATE messages SET embedding_state = 'failed' WHERE message_id = ?", [failed]);
+    db.prepare("UPDATE messages SET embedding_state = 'claimed' WHERE message_id = ?").run(claimed);
+    db.prepare("UPDATE messages SET embedding_state = 'failed' WHERE message_id = ?").run(failed);
 
     expect(hasEmbedding(db, claimed)).toBe(false);
     expect(hasEmbedding(db, failed)).toBe(false);
@@ -196,7 +196,7 @@ describe("indexMessages — exit condition scenarios", () => {
     const result = await indexMessages({ db, _processBatch: fakeBatch });
 
     expect(result.indexed).toBe(2);
-    const remaining = db.query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'pending'").get() as { c: number };
+    const remaining = db.prepare("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'pending'").get() as { c: number };
     expect(remaining.c).toBe(0);
   });
 
@@ -235,7 +235,7 @@ describe("indexMessages — exit condition scenarios", () => {
     const result = await indexMessages({ db, syncDone, _processBatch: fakeBatch });
 
     expect(result.indexed).toBe(4);
-    const pending = db.query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'pending'").get() as { c: number };
+    const pending = db.prepare("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'pending'").get() as { c: number };
     expect(pending.c).toBe(0);
   });
 
@@ -256,7 +256,7 @@ describe("indexMessages — exit condition scenarios", () => {
     const processedBatches = new Set<number>();
 
     // Create a fake batch processor that simulates a slow batch (to ensure multiple in flight)
-    const slowFakeBatch = async (db: Database, batch: MessageRow[]): Promise<{ indexed: number; failed: number }> => {
+    const slowFakeBatch = async (db: SqliteDatabase, batch: MessageRow[]): Promise<{ indexed: number; failed: number }> => {
       const currentBatch = batchCount++;
       processedBatches.add(currentBatch);
       
@@ -266,7 +266,7 @@ describe("indexMessages — exit condition scenarios", () => {
       // Mark messages as done
       const ids = batch.map((m) => m.id);
       const placeholders = ids.map(() => "?").join(",");
-      db.run(`UPDATE messages SET embedding_state = 'done' WHERE id IN (${placeholders})`, ids);
+      db.prepare(`UPDATE messages SET embedding_state = 'done' WHERE id IN (${placeholders})`).run(...ids);
       
       return Promise.resolve({ indexed: batch.length, failed: 0 });
     };
@@ -278,8 +278,8 @@ describe("indexMessages — exit condition scenarios", () => {
 
     // Verify all messages were processed
     expect(result.indexed).toBe(150);
-    const pending = db.query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'pending'").get() as { c: number };
-    const claimed = db.query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'claimed'").get() as { c: number };
+    const pending = db.prepare("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'pending'").get() as { c: number };
+    const claimed = db.prepare("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'claimed'").get() as { c: number };
     expect(pending.c).toBe(0);
     expect(claimed.c).toBe(0); // No messages should be left in 'claimed' state
   });
@@ -296,14 +296,14 @@ describe("indexMessages — exit condition scenarios", () => {
     const syncDone = new Promise<void>((resolve) => { resolveSyncDone = resolve; });
 
     // Create a fake batch processor that fails
-    const failingBatch = async (db: Database, batch: MessageRow[]): Promise<{ indexed: number; failed: number }> => {
+    const failingBatch = async (db: SqliteDatabase, batch: MessageRow[]): Promise<{ indexed: number; failed: number }> => {
       // Simulate processing delay
       await new Promise((resolve) => setTimeout(resolve, 10));
       
       // Mark messages as failed (simulating embedding API failure)
       const ids = batch.map((m) => m.id);
       const placeholders = ids.map(() => "?").join(",");
-      db.run(`UPDATE messages SET embedding_state = 'failed' WHERE id IN (${placeholders})`, ids);
+      db.prepare(`UPDATE messages SET embedding_state = 'failed' WHERE id IN (${placeholders})`).run(...ids);
       
       return Promise.resolve({ indexed: 0, failed: batch.length });
     };
@@ -318,9 +318,9 @@ describe("indexMessages — exit condition scenarios", () => {
     expect(result.indexed).toBe(0);
     
     // Verify all messages are properly marked as failed in DB
-    const failed = db.query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'failed'").get() as { c: number };
-    const claimed = db.query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'claimed'").get() as { c: number };
-    const pending = db.query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'pending'").get() as { c: number };
+    const failed = db.prepare("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'failed'").get() as { c: number };
+    const claimed = db.prepare("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'claimed'").get() as { c: number };
+    const pending = db.prepare("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'pending'").get() as { c: number };
     
     expect(failed.c).toBe(100); // All 100 messages should be marked as failed
     expect(claimed.c).toBe(0); // No messages should be left in 'claimed' state
@@ -329,7 +329,7 @@ describe("indexMessages — exit condition scenarios", () => {
 });
 
 describe("isSyncRunning", () => {
-  let db: Database;
+  let db: SqliteDatabase;
 
   beforeEach(() => {
     db = createTestDb();
@@ -340,13 +340,13 @@ describe("isSyncRunning", () => {
   });
 
   it("returns true when sync is running", () => {
-    db.run("UPDATE sync_summary SET is_running = 1 WHERE id = 1");
+    db.exec("UPDATE sync_summary SET is_running = 1 WHERE id = 1");
     expect(isSyncRunning(db)).toBe(true);
   });
 
   it("returns false after sync stops", () => {
-    db.run("UPDATE sync_summary SET is_running = 1 WHERE id = 1");
-    db.run("UPDATE sync_summary SET is_running = 0 WHERE id = 1");
+    db.exec("UPDATE sync_summary SET is_running = 1 WHERE id = 1");
+    db.exec("UPDATE sync_summary SET is_running = 0 WHERE id = 1");
     expect(isSyncRunning(db)).toBe(false);
   });
 });

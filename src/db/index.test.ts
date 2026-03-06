@@ -1,5 +1,5 @@
-import { describe, it, expect } from "bun:test";
-import { Database } from "bun:sqlite";
+import { describe, it, expect } from "vitest";
+import Database from "better-sqlite3";
 import {
   detectMissingSchemaColumns,
   formatSchemaDriftError,
@@ -9,7 +9,7 @@ import { SCHEMA } from "./schema";
 describe("db schema drift preflight", () => {
   it("reports no drift for fresh schema", () => {
     const db = new Database(":memory:");
-    db.run(SCHEMA);
+    db.exec(SCHEMA);
     const missing = detectMissingSchemaColumns(db);
     expect(missing).toEqual([]);
     db.close();
@@ -17,7 +17,7 @@ describe("db schema drift preflight", () => {
 
   it("detects missing messages.embedding_state in legacy DB", () => {
     const db = new Database(":memory:");
-    db.run(`
+    db.exec(`
       CREATE TABLE messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         message_id TEXT NOT NULL UNIQUE,

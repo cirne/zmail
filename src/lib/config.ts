@@ -84,8 +84,8 @@ export const config = {
     /** Comma-separated labels to exclude (e.g. Trash,Spam). Case-insensitive. Default: Trash,Spam. */
     excludeLabels: configJson.sync?.excludeLabels || (optional("SYNC_EXCLUDE_LABELS", "Trash,Spam").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)) as string[],
   },
-  openai: {
-    apiKey: getOpenAIKey(),
+  get openai() {
+    return { apiKey: getOpenAIKey() };
   },
   dataDir: join(ZMAIL_HOME, "data"),
 

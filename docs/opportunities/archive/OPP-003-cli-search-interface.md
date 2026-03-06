@@ -1,5 +1,7 @@
 # OPP-003: CLI Search Interface — Header-First Results + Selective Hydration
 
+**Status: Implemented (archived).** Core deliverables are in place; optional work (cursor pagination, provider labels) remains.
+
 **Problem:** The current CLI search interface is optimized for "return rich snippets now" rather than "help an agent iterate quickly." In real agent workflows, this causes unnecessary latency, oversized payloads, and brittle post-processing.
 
 Observed pain points:
@@ -82,21 +84,9 @@ Then add a normalized category layer as **additive metadata**, not a replacement
 
 This keeps the first iteration lightweight while preserving a path to cross-provider category search.
 
-## Implementation plan
+## Implementation status (delivered)
 
-1. Extend `SearchOptions` and CLI argument parser with `detail`, `mode`, `fields`, `cursor`, `timings`.
-2. Refactor `search()` to support mode selection instead of always-hybrid execution.
-3. Add output shaping layer (headers/snippet/body + field projection) before serialization.
-4. Add byte-safe serializer with truncation metadata.
-5. Add cursor pagination contract for stable iteration.
-6. Document recommended agent pattern:
-   - `search --detail headers --fields ... --limit N`
-   - then `message` / `thread` on selected IDs only.
-7. For phase-2 category features, bootstrap from provider-native labels first, then add canonical category mapping.
-
-## Implementation status (current)
-
-Completed in phase 1:
+Completed:
 
 - ✅ `SearchOptions` + CLI parser now support `--detail`, `--mode`, `--fields`, `--timings`.
 - ✅ Search execution supports `auto|fts|semantic|hybrid` (instead of always-hybrid).
@@ -107,26 +97,14 @@ Completed in phase 1:
 - ✅ JSON mode applies stricter `--limit` bounds (caps large limits for output stability).
 - ✅ Built-in timings are emitted with machine-readable stage fields (`ftsMs`, `embedMs`, `vectorMs`, `mergeMs`, `totalMs`, `modeUsed`).
 
-Remaining work:
+Remaining (optional):
 
 - ⏳ `--cursor` pagination contract is not implemented yet.
 - ⏳ Provider-native label/category workflows are not yet exposed in CLI search filters.
 - ⏳ A dedicated CLI reference page (beyond README snippets) is not yet published.
-
-Notes from manual validation:
-
-- For Apple receipt emails, shortlist + hydrate flow works well with `--detail headers`, `--fields`, `--ids-only`, and `--timings`.
-- `--detail body` currently mirrors `messages.body_text`; HTML-heavy receipts may return empty `body_text`, so total extraction may still require parsing raw `.eml` until richer body extraction is added.
 
 ## What stays the same
 
 - SQLite FTS5 + LanceDB hybrid architecture
 - Existing `search`, `message`, and `thread` command surfaces
 - RRF ranking logic for hybrid mode
-
-## Open questions
-
-- Should default `--mode` be `auto` or remain `hybrid` for backward relevance expectations?
-- Should `--detail body` return full `body_text` or a bounded excerpt by default?
-- Should payload caps be fixed or user-configurable (`--max-bytes`)?
-- Should we add a task-oriented command (`zmail purchases --after 30d`) now, or wait until the core search interface changes are in place?

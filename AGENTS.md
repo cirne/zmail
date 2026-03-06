@@ -1,6 +1,6 @@
 # zmail — Agent Guide
 
-**zmail** is an agent-first email system. It syncs email from IMAP providers, indexes it locally, and exposes it as a queryable dataset via a CLI binary and MCP server.
+**zmail** is an agent-first email system. It syncs email from IMAP providers, indexes it locally, and exposes it as a queryable dataset via a CLI and MCP server. Runs on **Node.js 22+**; dev uses `tsx`, distribution via `npm i -g zmail` (see [OPP-007](docs/opportunities/archive/OPP-007-packaging-npm-homebrew.md)).
 
 ## Key documents
 
@@ -12,7 +12,7 @@
 
 ## Tech stack
 
-Bun, TypeScript, SQLite (`bun:sqlite`), FTS5, LanceDB, imapflow. Compiles to a native binary via `bun build --compile`.
+Node.js 22+, TypeScript, SQLite (`better-sqlite3`), FTS5, LanceDB, imapflow. Dev: `tsx`; install: `npm i -g zmail` or build: `npm run build` → `dist/index.js`.
 
 ## Project structure
 
@@ -36,15 +36,20 @@ src/
 ## Commands
 
 ```bash
-bun install
-bun run dev          # starts background sync
-bun run sync         # initial sync (or: bun run src/index.ts sync --since 7d)
-bun run refresh      # refresh: fetch new messages (or: bun run src/index.ts refresh)
-bun run build        # compile native binary
-bun run install-cli  # build + copy binary to ~/.local/bin (or ZMAIL_INSTALL_DIR) for testing from another dir
-bun run lint         # tsc --noEmit (no ESLint)
-bun test             # run test suite
+npm install
+npm run dev          # starts background sync (tsx src/index.ts)
+npm run zmail --     # CLI from repo (e.g. npm run zmail -- search "foo"); the -- passes args
+npm run sync         # initial sync (or: npm run zmail -- sync --since 7d)
+npm run refresh      # refresh: fetch new messages (or: npm run zmail -- refresh)
+npm run build        # compile to dist/ (tsc + tsc-alias) for npm global install
+npm run install-cli  # install wrapper to ~/.local/bin so `zmail` runs source from any cwd
+npm run lint         # tsc --noEmit (no ESLint)
+npm test             # vitest run
 ```
+
+**Using `zmail` from the repo:** `npm run zmail -- <command> [args]` (the `--` is required so args reach the CLI). Or: `npx tsx src/index.ts -- <command> [args]`.
+
+**Using `zmail` from another directory:** Run `npm run install-cli` from the repo once. That installs a wrapper at `~/.local/bin/zmail` (or `ZMAIL_INSTALL_DIR`) that runs `npx tsx <repo>/src/index.ts -- "$@"`. Ensure that dir is on your PATH. Or install globally: `npm i -g .` (requires `npm run build` first).
 
 ### Attachment commands
 

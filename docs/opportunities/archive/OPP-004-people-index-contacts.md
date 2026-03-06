@@ -1,5 +1,7 @@
 # OPP-004: People Index and Writable Contacts — "Who" and Agent-Ready Identities
 
+**Status: Implemented (archived).** Milestone 1 (`zmail who`) is delivered; people index at index time, `zmail contact`, and MCP tools are future work.
+
 **Problem:** Email is a graph of people, but today zmail only indexes message content and metadata. There is no first-class notion of "who" — no fast, normalized way to ask "who is Tom?" or "who did Peter mention to me last week?" Sender filtering exists (`--from`), but it requires knowing the exact address. There is no index of every identity that appears in the mailbox (From, To, CC), no canonical "person" record that can be enriched by the user, and no CLI to write or update that metadata. So agents cannot reliably resolve "my dad" or "that person Sarah mentioned" without brittle parsing or multiple search round-trips.
 
 **Example:** A user asks an agent: "Who was that person Peter mentioned to me last week?" Today the agent would have to search for messages from Peter, then try to infer people from snippets or thread participants, with no structured list of identities, no frequency ranking, and no way to attach a note like "my dad is Geoff Cirne" so future queries can use it.
@@ -30,7 +32,7 @@
 - A people-indexing pass runs over `messages` and extracts every distinct identity from From/To/CC into a dedicated table (or materialized view) so `zmail who` can query a pre-aggregated index instead of scanning messages.
 - **Schema (candidate):** e.g. **people** + **people_emails** (canonical person, multiple emails per person, first/last name, mobile, type, note). Replaces or extends current minimal `contacts`.
 - **When it runs:** Separate step after sync, or third concurrent task; status table + lock like `indexing_status`.
-- **Exa crossover:** If [Exa integration](../EXA.md) is present, the enrich worker can populate web-derived fields (company summary, industry, role, one-line bio) per identity. Then `zmail who` / contact show return web-enriched context in one response.
+- **Exa crossover:** If [Exa integration](../../EXA.md) is present, the enrich worker can populate web-derived fields (company summary, industry, role, one-line bio) per identity. Then `zmail who` / contact show return web-enriched context in one response.
 
 ### `zmail contact` — write/update people metadata
 
@@ -51,4 +53,4 @@
 
 ## See also
 
-- [EXA.md](../EXA.md) — Exa.ai integration and **contact/entity enrichment at sync time**. Domain-level ("what is {domain}") and person-level Exa lookups can populate company, industry, and role on the same people/contacts layer this opportunity defines; `zmail who` and `zmail contact show` then return web-enriched context in one response.
+- [EXA.md](../../EXA.md) — Exa.ai integration and **contact/entity enrichment at sync time**. Domain-level ("what is {domain}") and person-level Exa lookups can populate company, industry, and role on the same people/contacts layer this opportunity defines; `zmail who` and `zmail contact show` then return web-enriched context in one response.

@@ -1,7 +1,18 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { spawn } from "child_process";
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+
+function streamToText(stream: NodeJS.ReadableStream | null): Promise<string> {
+  if (!stream) return Promise.resolve("");
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    stream.on("data", (c: Buffer) => chunks.push(c));
+    stream.on("end", () => resolve(Buffer.concat(chunks).toString()));
+    stream.on("error", reject);
+  });
+}
 
 describe("setup", () => {
   const originalZmailHome = process.env.ZMAIL_HOME;
@@ -48,19 +59,16 @@ describe("setup", () => {
       });
       
       // runSetup will exit(1) in non-interactive mode, so we test via spawn
-      const proc = Bun.spawn({
-        cmd: ["bun", "run", join(import.meta.dir, "..", "index.ts"), "setup"],
-        cwd: join(import.meta.dir, "..", ".."),
+      const proc = spawn("npx", ["tsx", join(import.meta.dirname, "..", "index.ts"), "setup"], {
+        cwd: join(import.meta.dirname, "..", ".."),
         env: { ...process.env, ZMAIL_HOME: testHome },
-        stdout: "pipe",
-        stderr: "pipe",
-        stdin: "pipe",
+        stdio: ["pipe", "pipe", "pipe"],
       });
       
       const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
+        streamToText(proc.stdout),
+        streamToText(proc.stderr),
+        new Promise<number | null>((resolve) => proc.on("close", resolve)),
       ]);
       
       expect(exitCode).toBe(1);
@@ -70,19 +78,16 @@ describe("setup", () => {
     });
 
     it("detects non-interactive when CI env var is set", async () => {
-      const proc = Bun.spawn({
-        cmd: ["bun", "run", join(import.meta.dir, "..", "index.ts"), "setup"],
-        cwd: join(import.meta.dir, "..", ".."),
+      const proc = spawn("npx", ["tsx", join(import.meta.dirname, "..", "index.ts"), "setup"], {
+        cwd: join(import.meta.dirname, "..", ".."),
         env: { ...process.env, ZMAIL_HOME: testHome, CI: "true" },
-        stdout: "pipe",
-        stderr: "pipe",
-        stdin: "pipe",
+        stdio: ["pipe", "pipe", "pipe"],
       });
       
       const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
+        streamToText(proc.stdout),
+        streamToText(proc.stderr),
+        new Promise<number | null>((resolve) => proc.on("close", resolve)),
       ]);
       
       expect(exitCode).toBe(1);
@@ -314,19 +319,16 @@ ZMAIL_OPENAI_API_KEY=sk-testkey
     it("setup with --no-validate flag is accepted", async () => {
       // This test verifies that --no-validate flag is accepted
       // Full interactive test would require mocking readline which is complex
-      const proc = Bun.spawn({
-        cmd: ["bun", "run", join(import.meta.dir, "..", "index.ts"), "setup", "--no-validate"],
-        cwd: join(import.meta.dir, "..", ".."),
+      const proc = spawn("npx", ["tsx", join(import.meta.dirname, "..", "index.ts"), "setup", "--no-validate"], {
+        cwd: join(import.meta.dirname, "..", ".."),
         env: { ...process.env, ZMAIL_HOME: testHome },
-        stdout: "pipe",
-        stderr: "pipe",
-        stdin: "pipe",
+        stdio: ["pipe", "pipe", "pipe"],
       });
       
       // Send EOF to stdin immediately (non-interactive)
-      proc.stdin.end();
+      proc.stdin?.end();
       
-      const exitCode = await proc.exited;
+      const exitCode = await new Promise<number | null>((resolve) => proc.on("close", resolve));
       
       // Should exit with non-interactive message or wait for input
       // Exit code 1 = non-interactive detected, 0 = completed (unlikely without input)
@@ -337,18 +339,15 @@ ZMAIL_OPENAI_API_KEY=sk-testkey
       // Create some existing files
       writeFileSync(join(testHome, "config.json"), JSON.stringify({ test: true }));
       
-      const proc = Bun.spawn({
-        cmd: ["bun", "run", join(import.meta.dir, "..", "index.ts"), "setup", "--clean", "--yes", "--no-validate"],
-        cwd: join(import.meta.dir, "..", ".."),
+      const proc = spawn("npx", ["tsx", join(import.meta.dirname, "..", "index.ts"), "setup", "--clean", "--yes", "--no-validate"], {
+        cwd: join(import.meta.dirname, "..", ".."),
         env: { ...process.env, ZMAIL_HOME: testHome },
-        stdout: "pipe",
-        stderr: "pipe",
-        stdin: "pipe",
+        stdio: ["pipe", "pipe", "pipe"],
       });
       
-      proc.stdin.end();
+      proc.stdin?.end();
       
-      const exitCode = await proc.exited;
+      const exitCode = await new Promise<number | null>((resolve) => proc.on("close", resolve));
       
       // Should exit (either non-interactive or completed)
       expect([0, 1]).toContain(exitCode);

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 import { formatMessageLlmFriendly, type MessageRowLike } from "./format-message";
 
 function msg(overrides: Partial<MessageRowLike> = {}): MessageRowLike {

@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { SqliteDatabase } from "~/db";
 import { logger } from "./logger";
 
 /**
@@ -31,12 +31,12 @@ export interface LockResult {
  * @returns Lock result indicating if acquired and if takeover occurred
  */
 export function acquireLock(
-  db: Database,
+  db: SqliteDatabase,
   table: "sync_summary" | "indexing_status",
   currentPid: number
 ): LockResult {
   const row = db
-    .query(`SELECT is_running, owner_pid FROM ${table} WHERE id = 1`)
+    .prepare(`SELECT is_running, owner_pid FROM ${table} WHERE id = 1`)
     .get() as { is_running: number; owner_pid: number | null } | null;
 
   if (!row) {
@@ -55,10 +55,9 @@ export function acquireLock(
     });
   }
 
-  db.run(
-    `UPDATE ${table} SET is_running = 1, owner_pid = ? WHERE id = 1`,
-    [currentPid]
-  );
+  db.prepare(
+    `UPDATE ${table} SET is_running = 1, owner_pid = ? WHERE id = 1`
+  ).run(currentPid);
 
   return {
     acquired: true,
@@ -73,8 +72,8 @@ export function acquireLock(
  * @param table Table name ('sync_summary' or 'indexing_status')
  */
 export function releaseLock(
-  db: Database,
+  db: SqliteDatabase,
   table: "sync_summary" | "indexing_status"
 ): void {
-  db.run(`UPDATE ${table} SET is_running = 0, owner_pid = NULL WHERE id = 1`);
+  db.exec(`UPDATE ${table} SET is_running = 0, owner_pid = NULL WHERE id = 1`);
 }

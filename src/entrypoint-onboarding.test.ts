@@ -1,21 +1,30 @@
-import { describe, it, expect } from "bun:test";
+import { spawn } from "child_process";
 import { join } from "path";
+import { describe, it, expect } from "vitest";
 
-const projectRoot = join(import.meta.dir, "..");
-const indexScript = join(import.meta.dir, "index.ts");
+const projectRoot = join(import.meta.dirname, "..");
+const indexScript = join(import.meta.dirname, "index.ts");
+
+function streamToText(stream: NodeJS.ReadableStream | null): Promise<string> {
+  if (!stream) return Promise.resolve("");
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    stream.on("data", (c: Buffer) => chunks.push(c));
+    stream.on("end", () => resolve(Buffer.concat(chunks).toString()));
+    stream.on("error", reject);
+  });
+}
 
 async function runEntrypoint(args: string[], env?: Record<string, string>) {
-  const proc = Bun.spawn({
-    cmd: ["bun", "run", indexScript, "--", ...args],
+  const proc = spawn("npx", ["tsx", indexScript, "--", ...args], {
     cwd: projectRoot,
-    stdout: "pipe",
-    stderr: "pipe",
+    stdio: ["pipe", "pipe", "pipe"],
     env: env ?? process.env,
   });
   const [out, err, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
+    streamToText(proc.stdout),
+    streamToText(proc.stderr),
+    new Promise<number | null>((resolve) => proc.on("close", resolve)),
   ]);
   return { stdout: out, stderr: err, exitCode };
 }
