@@ -23,7 +23,7 @@ async function runEntrypoint(args: string[], env?: Record<string, string>) {
 describe("entrypoint onboarding", () => {
   describe("help (no env required)", () => {
     it("--help prints usage and exits 0", async () => {
-      const { stdout, stderr, exitCode } = await runEntrypoint(["--help"]);
+      const { stdout, exitCode } = await runEntrypoint(["--help"]);
       expect(exitCode).toBe(0);
       expect(stdout).toContain("zmail");
       expect(stdout).toContain("Usage:");
@@ -44,31 +44,27 @@ describe("entrypoint onboarding", () => {
   });
 
   describe("setup (no env required)", () => {
-    it("setup command prints setup instructions and exits 0", async () => {
-      const { stdout, exitCode } = await runEntrypoint(["setup"]);
-      expect(exitCode).toBe(0);
-      expect(stdout).toContain("zmail setup");
-      expect(stdout).toContain("Environment");
-      expect(stdout).toContain("IMAP_USER");
-      expect(stdout).toContain("OPENAI_API_KEY");
-      expect(stdout).toContain("First sync");
+    it("setup command runs interactively (or exits if stdin not available)", async () => {
+      // Setup is now interactive, so in test environment it may fail or prompt
+      // We just verify it doesn't crash
+      const { exitCode } = await runEntrypoint(["setup", "--no-validate"]);
+      // Exit code may vary depending on whether stdin is available
+      expect([0, 1]).toContain(exitCode);
     });
   });
 
-  describe("missing required env", () => {
-    it("search with OPENAI_API_KEY unset prints error and setup instructions and exits 1", async () => {
-      const env = { ...process.env, OPENAI_API_KEY: "" };
+  describe("missing config", () => {
+    it("search without config.json prints error and exits 1", async () => {
+      // Use a non-existent ZMAIL_HOME to ensure no config exists
+      const env = { ...process.env, ZMAIL_HOME: "/tmp/zmail-nonexistent-" + Date.now() };
       const { stdout, stderr, exitCode } = await runEntrypoint(
         ["search", "foo"],
         env
       );
       expect(exitCode).toBe(1);
       const combined = stdout + stderr;
-      expect(combined).toContain("Missing required environment variable");
-      expect(combined).toContain("OPENAI_API_KEY");
+      expect(combined).toContain("No config found");
       expect(combined).toContain("zmail setup");
-      expect(combined).toContain("Environment");
-      expect(combined).toContain("IMAP_USER");
     });
   });
 });

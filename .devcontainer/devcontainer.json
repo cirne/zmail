@@ -6,6 +6,6 @@
   "postCreateCommand": "bun install",
   "forwardPorts": [3000],
   "remoteEnv": {
-    "DATA_DIR": "./data"
+    "ZMAIL_HOME": "${workspaceFolder}/.zmail"
   }
 }

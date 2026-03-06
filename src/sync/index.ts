@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { ImapFlow } from "imapflow";
 import { config, requireImapConfig } from "~/lib/config";
@@ -34,6 +34,27 @@ function ensureMaildir() {
   mkdirSync(join(base, "cur"), { recursive: true });
   mkdirSync(join(base, "new"), { recursive: true });
   mkdirSync(join(base, "tmp"), { recursive: true });
+  mkdirSync(join(base, "attachments"), { recursive: true });
+}
+
+function sanitizeFilename(filename: string): string {
+  // Remove or replace unsafe characters for filesystem
+  return filename.replace(/[<>:"|?*\x00-\x1f]/g, "_").replace(/\.\./g, "_");
+}
+
+function ensureUniqueFilename(dir: string, baseFilename: string): string {
+  const sanitized = sanitizeFilename(baseFilename);
+  let candidate = sanitized;
+  let counter = 1;
+  
+  while (existsSync(join(dir, candidate))) {
+    const ext = candidate.includes(".") ? candidate.substring(candidate.lastIndexOf(".")) : "";
+    const nameWithoutExt = ext ? candidate.substring(0, candidate.lastIndexOf(".")) : candidate;
+    candidate = `${nameWithoutExt}_${counter}${ext}`;
+    counter++;
+  }
+  
+  return candidate;
 }
 
 function safeFilename(uid: number, messageId: string): string {
@@ -262,6 +283,25 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
              VALUES (?, ?, 1, 1, ?)`,
             [threadId, parsed.subject, parsed.date]
           );
+
+          // Process attachments
+          if (parsed.attachments.length > 0) {
+            const attachmentsDir = join(config.maildirPath, "attachments", parsed.messageId);
+            mkdirSync(attachmentsDir, { recursive: true });
+
+            for (const att of parsed.attachments) {
+              const uniqueFilename = ensureUniqueFilename(attachmentsDir, att.filename);
+              const attachmentPath = join(attachmentsDir, uniqueFilename);
+              writeFileSync(attachmentPath, att.content, "binary");
+
+              const storedPath = join("attachments", parsed.messageId, uniqueFilename);
+              db.run(
+                `INSERT INTO attachments (message_id, filename, mime_type, size, stored_path, extracted_text)
+                 VALUES (?, ?, ?, ?, ?, NULL)`,
+                [parsed.messageId, att.filename, att.mimeType, att.size, storedPath]
+              );
+            }
+          }
 
           synced++;
           if (!earliestDate || parsed.date < earliestDate) earliestDate = parsed.date;

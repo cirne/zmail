@@ -12,19 +12,16 @@ Modern email systems are human-first — designed around inbox browsing and manu
 
 ## Quick start
 
-1. **Install + env**
+1. **Install**
    ```bash
    bun install
-   cp .env.example .env
    ```
 
-2. **Set required credentials in `.env`**
+2. **Run interactive setup**
    ```bash
-   IMAP_USER=your@gmail.com
-   IMAP_PASSWORD=xxxx-xxxx-xxxx-xxxx
-   OPENAI_API_KEY=sk-...
+   bun run src/index.ts setup
    ```
-   Use a [Gmail app password](https://support.google.com/accounts/answer/185833) for `IMAP_PASSWORD`.
+   This creates `~/.zmail/config.json` and `~/.zmail/.env` with your IMAP credentials and OpenAI API key. The setup command validates credentials and guides you through the process.
 
 3. **Sync + index (example: last 7 days)**
    ```bash

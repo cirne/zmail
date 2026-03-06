@@ -73,7 +73,7 @@ const res = await fetch("http://localhost:11434/api/embeddings", {
 4. **Re-index all emails** — existing LanceDB embeddings are in a different vector space (1536-dim OpenAI) and are incompatible. Drop and rebuild: `rm -rf ~/.zmail/data/vectors/` then run `zmail sync` or a backfill command. The SQLite `embedding_state` column will drive re-indexing automatically if rows are reset to `pending`.
 5. **Remove `OPENAI_API_KEY` as a hard requirement** — it should only be needed if the user has opted into OpenAI embeddings or uses other OpenAI features (e.g. vision API for attachment OCR).
 6. **Update `ARCHITECTURE.md` ADR-006** — record the decision to switch default embedding to local model.
-7. **Update `.env.example`** — `OPENAI_API_KEY` becomes optional, document what it's still used for.
+7. **Update setup flow** — `OPENAI_API_KEY` becomes optional in interactive setup, document what it's still used for.
 
 ## What stays the same
 

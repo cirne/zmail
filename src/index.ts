@@ -1,19 +1,17 @@
-// Main entrypoint — routes to CLI or starts the web + sync service.
-// Web is lazy-loaded so CLI (search, sync, thread, message, mcp) does not pull in hono or require bun install of web deps for CLI-only use.
+// Main entrypoint — routes to CLI commands or starts sync service.
 // Help and setup are handled here so they work without loading config (no env required).
 
-import { CLI_USAGE, SETUP_INSTRUCTIONS } from "~/lib/onboarding";
+import { CLI_USAGE } from "~/lib/onboarding";
+import { hasConfig } from "~/lib/config";
 
-const [, , command] = process.argv;
+const [, , command, ...args] = process.argv;
 
-/** Emit onboarding hint on stderr and exit 1 when failure is due to missing required env. */
-function handleMissingEnv(err: unknown): never {
+/** Emit onboarding hint on stderr and exit 1 when failure is due to missing config. */
+function handleMissingConfig(err: unknown): never {
   const msg = err instanceof Error ? err.message : String(err);
-  const isMissingEnv = /Missing required environment variable/.test(msg);
-  if (isMissingEnv) {
-    console.error(msg);
-    console.error("");
-    console.error(SETUP_INSTRUCTIONS);
+  const isMissingConfig = /Missing required|No config found|Run 'zmail setup'/.test(msg);
+  if (isMissingConfig) {
+    console.error("No config found. Run 'zmail setup' first.");
     process.exit(1);
   }
   throw err;
@@ -24,27 +22,35 @@ if (command === "--help" || command === "-h" || command === "help") {
   process.exit(0);
 }
 if (command === "setup") {
-  console.log(SETUP_INSTRUCTIONS);
+  const noValidate = args.includes("--no-validate");
+  const clean = args.includes("--clean");
+  const yes = args.includes("--yes");
+  const { runSetup } = await import("~/cli/setup");
+  await runSetup({ noValidate, clean, yes });
   process.exit(0);
+}
+
+// Check for config before proceeding
+if (!hasConfig()) {
+  console.error("No config found. Run 'zmail setup' first.");
+  process.exit(1);
 }
 
 if (command) {
   try {
     await import("~/cli");
   } catch (err) {
-    handleMissingEnv(err);
+    handleMissingConfig(err);
   }
 } else {
   try {
     const { runSync } = await import("~/sync");
     const { logger } = await import("~/lib/logger");
-    logger.info("Starting zmail");
-    const { startWebServer } = await import("~/web");
-    await startWebServer();
+    logger.info("Starting zmail sync");
     runSync().catch((err) => {
       logger.error("Sync daemon crashed", { error: String(err) });
     });
   } catch (err) {
-    handleMissingEnv(err);
+    handleMissingConfig(err);
   }
 }

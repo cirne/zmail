@@ -207,36 +207,57 @@ ImapProvider (interface)
 
 ### ADR-012: Attachment Extraction — Agent-Friendly Markdown Output
 
-**Decision:** Attachments are extracted during sync, converted to markdown, and indexed in SQLite FTS5 alongside message body text. Agents can list, read, and search attachment content via the same tool interface as messages.
+**Status: Implemented.**
+
+**Decision:** Attachments are captured during sync (raw files written to disk, metadata inserted into DB), and extraction to text happens on-demand when first read. Extracted text is cached in the `attachments.extracted_text` column and reused on subsequent reads. This keeps sync fast while making extracted content immediately available to agents.
 
 **Extraction libraries (TypeScript-native, Bun-compatible):**
 
-| Format | Library | Notes |
-|---|---|---|
-| PDF | `pdfjs-dist` | Mozilla PDF.js — mature, well-maintained |
-| DOCX | `mammoth` | HTML or markdown output, best-in-class |
-| XLSX | `xlsx` (SheetJS) | JSON/CSV output, rendered as markdown tables |
-| PPTX | `officeparser` | Text extraction |
-| HTML | `turndown` | HTML → markdown |
-| CSV, TXT | native | Trivial |
-| Images | Vision API (GPT-4o / Claude) | OCR and description |
+| Format | Library | Output | Status |
+|---|---|---|---|
+| PDF | `@cedrugs/pdf-parse` | Text | Working — tested on IRS W-9, NetJets invoices, RFC docs |
+| DOCX | `mammoth` | Markdown | Working — tested on multi-page documents |
+| XLSX/XLS | `exceljs` | CSV | Working — tested on Microsoft sample data, NetJets flight activity |
+| CSV | passthrough | CSV | Working |
+| HTML | `turndown` | Markdown | Working — strips tags, preserves structure |
+| TXT | passthrough | Text | Working |
+| Other | — | null | Returns null (unsupported) |
 
-**Rationale:** `markitdown-ts` (TypeScript port of Microsoft's MarkItDown) exists but is immature (105 stars). Individual libraries are battle-tested. A `DocumentExtractor` interface with per-format implementations keeps the abstraction clean.
+**Library notes:**
+- `@cedrugs/pdf-parse` (fork of pdf-parse v1 API): works in Bun. The original `pdf-parse` v2 depends on `pdfjs-dist` which requires `DOMMatrix` / canvas — not available in Bun.
+- `exceljs`: handles real `.xlsx` files correctly. The SheetJS community edition (`xlsx` v0.18.5) cannot parse modern XLSX files.
+- `mammoth`: converts DOCX to markdown natively, best-in-class for Word docs.
 
 **Storage:**
 - Raw attachment files: `maildir/attachments/<message_id>/<filename>` on volume
-- Extracted markdown text: stored in `attachments` table in SQLite
-- FTS5 index covers attachment content alongside message body — `search_mail("indemnification clause")` matches text *inside* a PDF
+- Extracted text cached in `attachments.extracted_text` column (populated on first read)
+- Future: sibling-file caching (`<filename>.md` or `<filename>.csv`) for faster reads without DB lookup
+
+**On-demand extraction flow:**
+1. `zmail attachment read <id>` or MCP `read_attachment(id)` called
+2. Check DB `extracted_text` column
+3. If populated: return cached content
+4. If null: read raw file → run extractor → update DB → return text
 
 **Agent interface:**
 ```
-CLI:  zmail attachments list <thread_id>
-      zmail attachments read <attachment_id>   → markdown output
+CLI:  zmail attachment list <message_id>        → JSON array of attachments
+      zmail attachment read <attachment_id>      → markdown/CSV text (stdout)
+      zmail attachment read <attachment_id> --raw → raw binary (stdout)
 
-MCP:  list_attachments(thread_id?, filters?)
-      read_attachment(attachment_id)               → markdown string
-      search_attachments(query)
+MCP:  list_attachments(messageId)              → JSON array
+      read_attachment(attachmentId)              → markdown/CSV string
 ```
+
+**Agent workflow example:**
+```
+1. zmail search "agreement from fred"      → finds message abc123
+2. zmail read abc123                       → body shows attachments: [{id:7, filename:"Agreement.pdf"}]
+3. zmail attachment read 7                 → outputs markdown text of the PDF
+4. Agent summarizes the agreement
+```
+
+**Test coverage:** `tests/attachments/extractors.test.ts` — 9 tests covering all supported formats plus unsupported format handling. Fixtures in `tests/attachments/fixtures/` include real-world files (IRS W-9, RFC 791, Microsoft sample data).
 
 ---
 

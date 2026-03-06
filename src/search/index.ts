@@ -401,7 +401,7 @@ export async function searchWithMeta(
     }
   }
 
-  const { query, limit = 20, offset = 0 } = effectiveOpts;
+  const { limit = 20, offset = 0 } = effectiveOpts;
   const hasFilters = !!(effectiveOpts.fromAddress || effectiveOpts.toAddress || effectiveOpts.subject || effectiveOpts.afterDate || effectiveOpts.beforeDate);
   
   // Update query in opts for mode resolution and search functions

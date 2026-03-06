@@ -11,7 +11,7 @@ description: Reset and manage the local SQLite database and data dir at dev time
 
 ## Where data lives
 
-- **Root:** `DATA_DIR` (default `~/.zmail/data`). Canonical list: `.env.example` (see AGENTS.md).
+- **Root:** `ZMAIL_HOME/data` (default `~/.zmail/data`, derived from `os.homedir()`). Config is in `~/.zmail/config.json` and `~/.zmail/.env` (see AGENTS.md).
 - **DB:** `DATA_DIR/zmail.db` (and WAL files `-shm`, `-wal`).
 - **Maildir:** `DATA_DIR/maildir/` (raw .eml in `cur/`, `new/`, `tmp/`).
 - **Sync state:** Stored inside the DB (`sync_state`, `sync_summary`).

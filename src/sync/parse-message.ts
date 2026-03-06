@@ -1,5 +1,12 @@
 import PostalMime from "postal-mime";
 
+export interface ParsedAttachment {
+  filename: string;
+  mimeType: string;
+  size: number;
+  content: Buffer;
+}
+
 export interface ParsedMessage {
   messageId: string;
   fromAddress: string;
@@ -10,6 +17,7 @@ export interface ParsedMessage {
   date: string; // ISO
   bodyText: string;
   bodyHtml: string | null;
+  attachments: ParsedAttachment[];
 }
 
 export async function parseRawMessage(raw: Buffer): Promise<ParsedMessage> {
@@ -19,6 +27,43 @@ export async function parseRawMessage(raw: Buffer): Promise<ParsedMessage> {
 
   const messageId = email.messageId ?? `<unknown-${Date.now()}@local>`;
   const date = email.date ? new Date(email.date).toISOString() : new Date().toISOString();
+
+  // Extract attachments, filtering out inline images (disposition: "inline" or related: true)
+  // These are embedded in HTML body, not user-facing attachments
+  const attachments: ParsedAttachment[] = [];
+  for (const att of email.attachments ?? []) {
+    // Skip inline attachments (embedded images in HTML)
+    if (att.disposition === "inline" || att.related) {
+      continue;
+    }
+
+    // Skip if no filename (unlikely but handle gracefully)
+    if (!att.filename) {
+      continue;
+    }
+
+    // Convert content to Buffer
+    let content: Buffer;
+    if (att.content instanceof ArrayBuffer) {
+      content = Buffer.from(att.content);
+    } else if (typeof att.content === "string") {
+      // Handle base64 or other encodings
+      if (att.encoding === "base64") {
+        content = Buffer.from(att.content, "base64");
+      } else {
+        content = Buffer.from(att.content, "utf8");
+      }
+    } else {
+      continue; // Skip if content format is unexpected
+    }
+
+    attachments.push({
+      filename: att.filename,
+      mimeType: att.mimeType,
+      size: content.length,
+      content,
+    });
+  }
 
   return {
     messageId,
@@ -30,5 +75,6 @@ export async function parseRawMessage(raw: Buffer): Promise<ParsedMessage> {
     date,
     bodyText: email.text ?? "",
     bodyHtml: email.html ?? null,
+    attachments,
   };
 }

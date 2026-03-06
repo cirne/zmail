@@ -7,7 +7,6 @@ import { startMcpServer } from "~/mcp";
 import { config } from "~/lib/config";
 import { logger } from "~/lib/logger";
 import { parseSinceToDate } from "~/sync/parse-since";
-import { config } from "~/lib/config";
 import { htmlToMarkdown } from "~/lib/content-normalize";
 import { parseRawMessage } from "~/sync/parse-message";
 import type { SearchResult } from "~/lib/types";
@@ -15,6 +14,7 @@ import type { Database } from "bun:sqlite";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { formatMessageLlmFriendly } from "~/cli/format-message";
+import { extractAndCache } from "~/attachments";
 
 const [, , command, ...args] = process.argv;
 
@@ -438,6 +438,21 @@ function readRawEmail(rawPath: string): Buffer | null {
 }
 
 async function formatMessageForOutput(message: MessageRow, raw: boolean): Promise<Record<string, unknown>> {
+  const db = getDb();
+  const attachments = db
+    .query(
+      `SELECT id, filename, mime_type, size, stored_path, extracted_text
+       FROM attachments WHERE message_id = ? ORDER BY filename`
+    )
+    .all(message.message_id) as Array<{
+    id: number;
+    filename: string;
+    mime_type: string;
+    size: number;
+    stored_path: string;
+    extracted_text: string | null;
+  }>;
+
   if (raw) {
     const rawEmail = readRawEmail(message.raw_path);
     return {
@@ -447,6 +462,13 @@ async function formatMessageForOutput(message: MessageRow, raw: boolean): Promis
         source: "eml",
         eml: rawEmail ? rawEmail.toString("utf8") : null,
       },
+      attachments: attachments.map((a) => ({
+        id: a.id,
+        filename: a.filename,
+        mimeType: a.mime_type,
+        size: a.size,
+        extracted: a.extracted_text !== null,
+      })),
     };
   }
 
@@ -483,6 +505,13 @@ async function formatMessageForOutput(message: MessageRow, raw: boolean): Promis
       source,
       markdown: body,
     },
+    attachments: attachments.map((a) => ({
+      id: a.id,
+      filename: a.filename,
+      mimeType: a.mime_type,
+      size: a.size,
+      extracted: a.extracted_text !== null,
+    })),
   };
 }
 
@@ -797,6 +826,138 @@ async function main() {
       break;
     }
 
+    case "attachment":
+    case "attachments": {
+      if (args.length === 0) {
+        console.error("Usage: zmail attachment list <message_id>");
+        console.error("       zmail attachment read <attachment_id> [--raw]");
+        process.exit(1);
+      }
+
+      const subcommand = args[0];
+      if (subcommand === "list") {
+        const messageId = args[1];
+        if (!messageId) {
+          console.error("Usage: zmail attachment list <message_id>");
+          process.exit(1);
+        }
+
+        const db = getDb();
+        const attachments = db
+          .query(
+            `SELECT id, filename, mime_type, size, stored_path, extracted_text
+             FROM attachments WHERE message_id = ? ORDER BY filename`
+          )
+          .all(messageId) as Array<{
+          id: number;
+          filename: string;
+          mime_type: string;
+          size: number;
+          stored_path: string;
+          extracted_text: string | null;
+        }>;
+
+        const isTty = process.stdout.isTTY;
+        const shouldOutputJson = !isTty || args.includes("--json");
+
+        if (shouldOutputJson) {
+          console.log(
+            JSON.stringify(
+              attachments.map((a) => ({
+                id: a.id,
+                filename: a.filename,
+                mimeType: a.mime_type,
+                size: a.size,
+                extracted: a.extracted_text !== null,
+              })),
+              null,
+              2
+            )
+          );
+        } else {
+          if (attachments.length === 0) {
+            console.log("No attachments found.");
+            break;
+          }
+          console.log(`Attachments for ${messageId}:\n`);
+          console.log("  ID    FILENAME".padEnd(50) + "  MIME TYPE".padEnd(40) + "  SIZE      EXTRACTED");
+          console.log("  " + "-".repeat(110));
+          for (const att of attachments) {
+            const sizeStr =
+              att.size >= 1024 * 1024
+                ? `${(att.size / (1024 * 1024)).toFixed(2)} MB`
+                : att.size >= 1024
+                  ? `${(att.size / 1024).toFixed(2)} KB`
+                  : `${att.size} B`;
+            const filenameShort = att.filename.length > 40 ? att.filename.slice(0, 37) + "..." : att.filename.padEnd(40);
+            const mimeShort = att.mime_type.length > 38 ? att.mime_type.slice(0, 35) + "..." : att.mime_type.padEnd(38);
+            console.log(`  ${String(att.id).padStart(4)}  ${filenameShort}  ${mimeShort}  ${sizeStr.padStart(9)}  ${att.extracted_text !== null ? "yes" : "no"}`);
+          }
+        }
+      } else if (subcommand === "read") {
+        const attachmentIdRaw = args[1];
+        if (!attachmentIdRaw) {
+          console.error("Usage: zmail attachment read <attachment_id> [--raw]");
+          process.exit(1);
+        }
+
+        const attachmentId = Number.parseInt(attachmentIdRaw, 10);
+        if (!Number.isFinite(attachmentId) || attachmentId <= 0) {
+          console.error(`Invalid attachment ID: "${attachmentIdRaw}". Must be a positive number.`);
+          process.exit(1);
+        }
+
+        const raw = args.includes("--raw");
+
+        const db = getDb();
+        const attachment = db
+          .query("SELECT id, message_id, filename, mime_type, size, stored_path FROM attachments WHERE id = ?")
+          .get(attachmentId) as
+          | {
+              id: number;
+              message_id: string;
+              filename: string;
+              mime_type: string;
+              size: number;
+              stored_path: string;
+            }
+          | undefined;
+
+        if (!attachment) {
+          console.error(`Attachment ${attachmentId} not found.`);
+          process.exit(1);
+        }
+
+        const absPath = join(config.maildirPath, attachment.stored_path);
+
+        if (raw) {
+          // Output raw binary
+          try {
+            const rawBuffer = readFileSync(absPath);
+            process.stdout.write(rawBuffer);
+          } catch (err) {
+            console.error(`Failed to read attachment file: ${err instanceof Error ? err.message : String(err)}`);
+            process.exit(1);
+          }
+        } else {
+          // Extract and output text
+          try {
+            const { text } = await extractAndCache(absPath, attachment.mime_type, attachment.filename, attachment.id);
+            console.log(text);
+          } catch (err) {
+            console.error(`Failed to extract attachment: ${err instanceof Error ? err.message : String(err)}`);
+            process.exit(1);
+          }
+        }
+      } else {
+        console.error(`Unknown subcommand: ${subcommand}`);
+        console.error("Usage: zmail attachment list <message_id>");
+        console.error("       zmail attachment read <attachment_id> [--raw]");
+        process.exit(1);
+      }
+      break;
+    }
+
     case "mcp": {
       await startMcpServer();
       break;
@@ -818,6 +979,8 @@ Usage:
   zmail stats                     Show database statistics
   zmail read <id> [--raw]         Read a message (or: zmail message <id>)
   zmail thread <id> [--raw]       Fetch thread (Markdown by default; raw .eml with --raw)
+  zmail attachment list <id>     List attachments for a message
+  zmail attachment read <id>      Read/extract attachment (markdown/CSV by default; --raw for binary)
   zmail mcp                       Start MCP server (stdio)
 
 Run 'zmail setup' for setup instructions.

@@ -12,11 +12,13 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@cedrugs/pdf-parse": "^1.0.0",
     "@lancedb/lancedb": "latest",
     "@modelcontextprotocol/sdk": "latest",
-    "hono": "latest",
+    "exceljs": "^4.4.0",
     "imapflow": "latest",
     "mailparser": "^3.9.3",
+    "mammoth": "^1.11.0",
     "openai": "latest",
     "postal-mime": "^2.7.3",
     "search-query-parser": "^1.6.0",
@@ -26,6 +28,8 @@
     "@types/bun": "latest",
     "@types/mailparser": "^3.4.6",
     "@types/turndown": "^5.0.6",
+    "docx": "^9.6.0",
+    "pdf-lib": "^1.17.1",
     "typescript": "latest"
   }
 }

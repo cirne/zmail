@@ -1,27 +1,22 @@
 import { Hono } from "hono";
-import { setupRoutes } from "./routes/setup";
-import { dashboardRoutes } from "./routes/dashboard";
-import { searchRoutes } from "./routes/search";
-import { config } from "~/lib/config";
 import { logger } from "~/lib/logger";
 
 export function createApp() {
   const app = new Hono();
 
-  app.route("/setup", setupRoutes);
-  app.route("/", dashboardRoutes);
-  app.route("/search", searchRoutes);
+  // Routes removed - web UI functionality moved to CLI
 
   return app;
 }
 
 export async function startWebServer() {
   const app = createApp();
+  const port = Number(process.env.PORT || "3000");
 
   Bun.serve({
-    port: config.port,
+    port,
     fetch: app.fetch,
   });
 
-  logger.info(`Web UI running`, { url: `http://localhost:${config.port}` });
+  logger.info(`Web UI running`, { url: `http://localhost:${port}` });
 }

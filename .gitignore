@@ -13,6 +13,7 @@ build/
 .env.*.local
 
 # Local data (never commit email data)
+.zmail/
 /data/
 maildir/
 *.db

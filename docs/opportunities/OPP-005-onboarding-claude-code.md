@@ -45,7 +45,7 @@
   - `IMAP_USER` — Gmail address.
   - `IMAP_PASSWORD` — Gmail **app password** (16-char, from [Google App Passwords](https://myaccount.google.com/apppasswords); 2-Step Verification must be on).
 - **Optional:** `OPENAI_API_KEY` for semantic search.
-- **Canonical reference:** Point to repo `.env.example` / AGENTS.md so the skill does not duplicate the full env list; the skill only mandates the minimal set above.
+- **Canonical reference:** Point to `zmail setup` interactive flow / AGENTS.md for configuration; the skill only mandates the minimal set above.
 - **One-line guidance:** “Create an app password: https://myaccount.google.com/apppasswords (requires 2-Step Verification).”
 
 ### 3. Verify
@@ -69,7 +69,7 @@ A **zmail-onboard** (or similar) skill would contain:
 |--------|--------|
 | **When to use** | User wants to install and configure zmail (CLI) for the first time in this environment. |
 | **Download** | Stable URL; pick binary by OS/arch; `chmod +x`; add to PATH or run from dir. |
-| **Account setup** | Create `.env` with `IMAP_USER`, `IMAP_PASSWORD`; link to app password page; optional `OPENAI_API_KEY`. Reference `.env.example` for full list. |
+| **Account setup** | Run `zmail setup` interactively (prompts for IMAP credentials, OpenAI API key); link to app password page. See AGENTS.md for optional env vars. |
 | **Verify** | `zmail sync` then optionally `zmail search "…"`. |
 | **Do not** | Commit credentials or `data/`. |
 
@@ -113,6 +113,5 @@ This keeps the “amazing first run” story in one place for both humans and LL
 ## See also
 
 - [AGENTS.md](../../AGENTS.md) — env vars, commands, onboarding behavior, single source of truth.
-- [.env.example](../../.env.example) — canonical env list.
 - [src/lib/onboarding.ts](../../src/lib/onboarding.ts) — canonical CLI usage and setup text (no deps).
 - [OPP-003](OPP-003-cli-search-interface.md) — CLI search interface (post-onboarding agent usage).

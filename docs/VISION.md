@@ -391,7 +391,7 @@ Example queries:
 "summarize the budget spreadsheet from the Q3 planning thread"
 ```
 
-Supported formats: PDF, DOCX, XLSX, PPTX, HTML, CSV, plain text. Images described via vision model.
+Currently supported: PDF, DOCX, XLSX, HTML, CSV, plain text. Future: PPTX, images via vision model.
 
 ---
 
