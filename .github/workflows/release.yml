@@ -89,7 +89,21 @@ jobs:
           body: |
             ## Installation
 
-            ### From GitHub Packages (recommended)
+            ### Quick install (recommended)
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/cirne/zmail/main/install.sh | bash
+            ```
+
+            The install script handles:
+            - Node.js 22+ requirement check
+            - npm configuration for GitHub Packages
+            - GitHub PAT authentication guidance
+            - Global installation of `@cirne/zmail`
+
+            ### Manual installation (alternative)
+
+            If you prefer to install manually:
 
             1. Create a GitHub Personal Access Token with `read:packages` permission
             2. Configure npm:

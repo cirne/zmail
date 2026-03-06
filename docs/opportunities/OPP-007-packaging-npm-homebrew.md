@@ -97,7 +97,7 @@ GitHub Actions workflow (`.github/workflows/release.yml`) automatically builds a
 **Automatic releases (main branch):**
 - Every push to `main` automatically triggers a release after tests pass
 - Version: `0.1.0-alpha.YYYYMMDD.HHMMSS` (timestamp-based)
-- Published with `latest` dist-tag, so `npm install -g @cirne/zmail` gets the latest main build
+- Published with `latest` dist-tag, so the install script (`curl -fsSL https://raw.githubusercontent.com/cirne/zmail/main/install.sh | bash`) installs the latest main build
 - No GitHub Release created (just package published)
 
 **Manual alpha releases:**
