@@ -1,0 +1,35 @@
+name: Build & Upload
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install
+
+      - name: Build darwin-arm64
+        run: bun build src/index.ts --compile --target=bun-darwin-arm64 --outfile dist/zmail-darwin-arm64
+
+      - name: Build linux-x64
+        run: bun build src/index.ts --compile --target=bun-linux-x64 --outfile dist/zmail-linux-x64
+
+      - name: Upload to DigitalOcean Spaces
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+          RELEASE_SECRET_PATH: ${{ secrets.RELEASE_SECRET_PATH }}
+        run: |
+          ENDPOINT="https://sfo3.digitaloceanspaces.com"
+          BUCKET="zmail-builds"
+          aws s3 cp dist/zmail-darwin-arm64 "s3://$BUCKET/$RELEASE_SECRET_PATH/darwin-arm64/zmail" \
+            --endpoint-url "$ENDPOINT" --acl public-read
+          aws s3 cp dist/zmail-linux-x64 "s3://$BUCKET/$RELEASE_SECRET_PATH/linux-x64/zmail" \
+            --endpoint-url "$ENDPOINT" --acl public-read
