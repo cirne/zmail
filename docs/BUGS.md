@@ -6,7 +6,10 @@ When an agent or user hits a failure, we document it here. Root cause and "agent
 
 ## Active
 
-_(none)_
+| ID | Title | Summary |
+|---|---|---|
+| [BUG-002](bugs/BUG-002-attachment-discoverability-and-read.md) | Attachment Discoverability and Read — Agent-Reported | Attachment subcommands (`attachment list`, `attachment read`) not discoverable from help; `read` doesn't show attachments; no path from "extracted: true" to content. |
+| [BUG-003](bugs/BUG-003-fts-vs-semantic-search-guidance.md) | FTS vs Semantic Search Guidance — Agent-Reported | `--mode` flag exists but lacks discoverability and usage guidance; no help text on when to use FTS vs semantic; no result attribution showing which search matched. |
 
 ---
 

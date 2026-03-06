@@ -28,7 +28,12 @@ For each feedback file:
 
 **CRITICAL:** Before creating any new bugs/opportunities, verify the feedback hasn't already been processed. Assume feedback may have been processed in a previous run.
 
-For each feedback file, search existing documentation:
+**First, check the processed feedback tracker:**
+- Read `docs/feedback-processed.md` — this is the source of truth for processed feedback
+- If the feedback filename appears in the tracker, it has already been processed → **Skip processing**
+- Note the action taken and related bug/opportunity ID from the tracker
+
+**Then, search existing documentation for semantic matches:**
 
 **Check bugs:**
 - Active bugs: `docs/bugs/*.md` (excluding archive)
@@ -52,12 +57,12 @@ For each feedback file, search existing documentation:
 For each feedback file:
 
 **Already tracked (active):**
-- If feedback matches an active bug/opportunity → **Skip processing** (already handled). Delete feedback file or move to processed folder.
+- If feedback matches an active bug/opportunity → **Skip processing** (already handled). Move feedback file to `submitted/` subdirectory.
 - Optionally: Update existing bug/opportunity with additional context from feedback if it adds value
 
 **Already fixed (archived):**
-- If feedback matches an archived/fixed bug → Delete feedback file (issue resolved, already processed)
-- If feedback matches an archived/implemented opportunity → Delete feedback file (feature delivered, already processed)
+- If feedback matches an archived/fixed bug → Move feedback file to `submitted/` subdirectory (issue resolved, already processed)
+- If feedback matches an archived/implemented opportunity → Move feedback file to `submitted/` subdirectory (feature delivered, already processed)
 
 **New issue (no match found):**
 - Only if feedback doesn't match any existing bug/opportunity (active or archived) → Convert to new bug or opportunity
@@ -142,8 +147,11 @@ For each feedback file:
 ### 5. Clean Up
 
 After processing:
-- Delete feedback files that are duplicates or already fixed
-- Optionally move processed feedback to `../ztest/feedback/processed/` for reference
+- **Update `docs/feedback-processed.md`** — add entry with filename, date, action taken, and related bug/opportunity ID
+- **Move processed feedback to `submitted/` subdirectory** — prefer moving to `../ztest/feedback/submitted/` rather than deleting (preserves feedback for reference)
+  - Create `../ztest/feedback/submitted/` directory if it doesn't exist: `mkdir -p ../ztest/feedback/submitted`
+  - Move file: `mv ../ztest/feedback/<filename>.md ../ztest/feedback/submitted/<filename>.md`
+- For duplicates or already-fixed items: Still move to `submitted/` rather than deleting (maintains audit trail)
 - Update any indexes (`docs/BUGS.md`, `docs/OPPORTUNITIES.md`)
 
 ## Example Workflow
@@ -164,13 +172,19 @@ grep -r "semantic search" docs/bugs/ docs/opportunities/
 # 5. Update index files
 # Edit docs/BUGS.md or docs/OPPORTUNITIES.md
 
-# 6. Clean up processed feedback
-rm ../ztest/feedback/ux-semantic-search-guidance.md
+# 6. Update processed feedback tracker
+# Edit docs/feedback-processed.md
+
+# 7. Move processed feedback to submitted/
+mkdir -p ../ztest/feedback/submitted
+mv ../ztest/feedback/ux-semantic-search-guidance.md ../ztest/feedback/submitted/ux-semantic-search-guidance.md
 ```
 
 ## Key Files
 
-- Feedback source: `../ztest/feedback/*.md`
+- Feedback source: `../ztest/feedback/*.md` (only process files in root, not in `submitted/`)
+- **Processed feedback location:** `../ztest/feedback/submitted/` — move processed feedback here (preserves audit trail)
+- **Processed feedback tracker:** `docs/feedback-processed.md` — source of truth for processed feedback
 - Bug index: `docs/BUGS.md`
 - Bug files: `docs/bugs/BUG-XXX-*.md`
 - Opportunity index: `docs/OPPORTUNITIES.md`
@@ -178,9 +192,11 @@ rm ../ztest/feedback/ux-semantic-search-guidance.md
 
 ## Notes
 
-- **Idempotency**: This workflow must be safe to run multiple times. Always assume feedback may have already been processed. Check both active and archived bugs/opportunities before creating new entries.
+- **Idempotency**: This workflow must be safe to run multiple times. Always assume feedback may have already been processed. **First check `docs/feedback-processed.md`** — this is the primary source of truth for processed feedback. Then check both active and archived bugs/opportunities before creating new entries.
+- **Processed feedback tracker**: Always update `docs/feedback-processed.md` after processing feedback. This file tracks all processed feedback with the action taken (bug created, opportunity created, ignored, etc.) and related IDs.
 - **ID numbering**: Use sequential IDs (BUG-003, OPP-008, etc.). Check both `docs/bugs/` and `docs/bugs/archive/` (or `docs/opportunities/` and `docs/opportunities/archive/`) to find the highest number.
 - **Title slugs**: Convert titles to lowercase, hyphenated slugs for filenames (e.g., "UX Issue: Search Guidance" → `ux-issue-search-guidance.md`)
 - **Semantic matching**: When checking for duplicates, look for similar problems/areas, not just exact title matches. Read full bug/opportunity content, not just titles.
-- **Archive check**: Always check archive directories — if something is already fixed/implemented, the feedback has been processed and should be deleted.
+- **Archive check**: Always check archive directories — if something is already fixed/implemented, the feedback has been processed and should be moved to `submitted/`.
+- **File cleanup**: Always move processed feedback to `../ztest/feedback/submitted/` rather than deleting. This preserves an audit trail and allows reference back to original feedback. Only process files in `../ztest/feedback/*.md` (not files already in `submitted/`).
 - **When in doubt**: If unsure whether feedback matches an existing bug/opportunity, err on the side of not creating a duplicate. Skip processing rather than risk duplicate entries.
