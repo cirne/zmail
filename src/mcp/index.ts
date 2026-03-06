@@ -42,7 +42,7 @@ export function createMcpServer() {
 
   server.tool(
     "search_mail",
-    "Search emails using hybrid search (FTS5 full-text + semantic). Returns matching messages with snippets. Supports inline query operators: from:, to:, subject:, after:, before:. Example: 'invoice from:alice@example.com after:30d'",
+    "Search emails using hybrid search (semantic + FTS5 full-text) by default. Returns matching messages with snippets. Supports inline query operators: from:, to:, subject:, after:, before:. Use fts=true for FTS-only (exact keyword matching). Example: 'invoice from:alice@example.com after:30d'",
     {
       query: z.string().optional().describe("Full-text search query. Supports inline operators: from:, to:, subject:, after:, before:. Example: 'invoice from:alice@example.com after:30d'"),
       limit: z.number().optional().describe("Maximum number of results to return (default: 20)"),
@@ -50,8 +50,9 @@ export function createMcpServer() {
       fromAddress: z.string().optional().describe("Filter by sender email address (alternative to 'from:' in query)"),
       afterDate: z.string().optional().describe("Filter messages after this date. ISO 8601 format or relative (e.g., '7d', '30d', '2024-01-01')"),
       beforeDate: z.string().optional().describe("Filter messages before this date. ISO 8601 format or relative (e.g., '7d', '30d', '2024-01-01')"),
+      fts: z.boolean().optional().describe("If true, use FTS-only search (exact keyword matching). Default is false (hybrid search: semantic + FTS)"),
     },
-    async ({ query, limit, offset, fromAddress, afterDate, beforeDate }) => {
+    async ({ query, limit, offset, fromAddress, afterDate, beforeDate, fts }) => {
       const db = getDb();
       const results = await search(db, {
         query,
@@ -60,6 +61,7 @@ export function createMcpServer() {
         fromAddress,
         afterDate,
         beforeDate,
+        fts,
       });
 
       return {

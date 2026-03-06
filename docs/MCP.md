@@ -30,7 +30,7 @@ The server runs on stdio and communicates via JSON-RPC over stdin/stdout. It wil
 
 ### `search_mail`
 
-Search emails using hybrid search (FTS5 + semantic). Returns matching messages with snippets.
+Search emails using hybrid search (semantic + FTS5) by default. Returns matching messages with snippets. Use `fts=true` for FTS-only (exact keyword matching).
 
 **Parameters:**
 - `query` (string, optional): Full-text search query. Supports inline operators: `from:`, `to:`, `subject:`, `after:`, `before:`
@@ -39,6 +39,7 @@ Search emails using hybrid search (FTS5 + semantic). Returns matching messages w
 - `fromAddress` (string, optional): Filter by sender email address
 - `afterDate` (string, optional): Filter messages after this date (ISO 8601 or relative like "7d", "30d")
 - `beforeDate` (string, optional): Filter messages before this date
+- `fts` (boolean, optional): If true, use FTS-only search (exact keyword matching). Default is false (hybrid search)
 
 **Returns:** JSON array of message objects with `message_id`, `from`, `to`, `subject`, `date`, `snippet`, etc.
 

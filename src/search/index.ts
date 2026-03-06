@@ -4,8 +4,7 @@ import { embedText } from "./embeddings";
 import { searchVectors } from "./vectors";
 import { parseSearchQuery } from "./query-parse";
 
-export type SearchMode = "auto" | "fts" | "semantic" | "hybrid";
-export type ResolvedSearchMode = "filter" | "fts" | "semantic" | "hybrid";
+// ResolvedSearchMode type removed - no longer needed
 
 export interface SearchOptions {
   query?: string;
@@ -16,7 +15,8 @@ export interface SearchOptions {
   subject?: string;
   afterDate?: string;
   beforeDate?: string;
-  mode?: SearchMode;
+  /** When true, use FTS-only search (exact keyword matching). Default is hybrid (semantic + FTS). */
+  fts?: boolean;
   /** When true, use OR logic between filters instead of AND. */
   filterOr?: boolean;
 }
@@ -27,12 +27,16 @@ export interface SearchTimings {
   vectorMs?: number;
   mergeMs?: number;
   totalMs: number;
-  modeUsed: ResolvedSearchMode;
 }
 
 export interface SearchResultSet {
   results: SearchResult[];
   timings: SearchTimings;
+  _meta?: {
+    hasFtsMatches: boolean;
+    hasSemanticOnlyMatches: boolean;
+    hasAnyMatches: boolean;
+  };
 }
 
 /** LIKE pattern for partial match on address or display name (e.g. "donna" -> "%donna%"). */
@@ -186,16 +190,19 @@ async function vectorSearchFromEmbedding(
   db: SqliteDatabase,
   opts: SearchOptions,
   queryEmbedding: number[]
-): Promise<SearchResult[]> {
+): Promise<{ results: SearchResult[]; rawScores: Map<string, number> }> {
   const { query, limit = 20, offset = 0, fromAddress, toAddress, subject, afterDate, beforeDate } = opts;
-  if (!query?.trim()) return [];
+  if (!query?.trim()) return { results: [], rawScores: new Map() };
 
   // Search LanceDB for similar messages
   const vectorResults = await searchVectors(queryEmbedding, limit + offset + 50); // Get extra for filtering
 
+  // Filter out low-confidence semantic matches
+  const filteredResults = vectorResults.filter((r) => r.score >= SEMANTIC_SCORE_THRESHOLD);
+
   // Fetch full message details from SQLite and apply filters
-  const messageIds = vectorResults.map((r) => r.messageId);
-  if (messageIds.length === 0) return [];
+  const messageIds = filteredResults.map((r) => r.messageId);
+  if (messageIds.length === 0) return { results: [], rawScores: new Map() };
 
   const placeholders = messageIds.map(() => "?").join(",");
   const conditions: string[] = [`m.message_id IN (${placeholders})`];
@@ -244,7 +251,8 @@ async function vectorSearchFromEmbedding(
     .all(...params) as Array<SearchResult & { bodyText: string }>;
 
   // Create a map of messageId -> vector score for ranking
-  const scoreMap = new Map(vectorResults.map((r) => [r.messageId, r.score]));
+  const scoreMap = new Map(filteredResults.map((r) => [r.messageId, r.score]));
+  const rawScores = new Map(filteredResults.map((r) => [r.messageId, r.score]));
 
   // Sort by vector score (highest first), then apply limit/offset
   const sorted = messages
@@ -256,21 +264,28 @@ async function vectorSearchFromEmbedding(
     .sort((a, b) => b.rank - a.rank)
     .slice(offset, offset + limit);
 
-  return sorted.map(({ bodyText, ...rest }) => rest);
+  return { results: sorted.map(({ bodyText, ...rest }) => rest), rawScores };
 }
 
 async function vectorSearch(db: SqliteDatabase, opts: SearchOptions): Promise<SearchResult[]> {
   const { query } = opts;
   if (!query?.trim()) return [];
   const queryEmbedding = await embedText(query);
-  return vectorSearchFromEmbedding(db, opts, queryEmbedding);
+  const { results } = await vectorSearchFromEmbedding(db, opts, queryEmbedding);
+  return results;
 }
 
 interface VectorSearchRun {
   results: SearchResult[];
   embedMs: number;
   vectorMs: number;
+  rawScores: Map<string, number>; // messageId -> semantic score
 }
+
+// Minimum semantic similarity score threshold (0.45 = cosine distance ~1.22)
+// Good semantic matches cluster around 0.46-0.50, garbage around 0.40-0.44
+// This threshold filters gibberish while preserving legitimate semantic matches
+const SEMANTIC_SCORE_THRESHOLD = 0.45;
 
 async function vectorSearchWithTimings(
   db: SqliteDatabase,
@@ -278,7 +293,7 @@ async function vectorSearchWithTimings(
 ): Promise<VectorSearchRun> {
   const { query } = opts;
   if (!query?.trim()) {
-    return { results: [], embedMs: 0, vectorMs: 0 };
+    return { results: [], embedMs: 0, vectorMs: 0, rawScores: new Map() };
   }
 
   const embedStart = Date.now();
@@ -286,37 +301,13 @@ async function vectorSearchWithTimings(
   const embedMs = Date.now() - embedStart;
 
   const vectorStart = Date.now();
-  const results = await vectorSearchFromEmbedding(db, opts, queryEmbedding);
+  const { results, rawScores } = await vectorSearchFromEmbedding(db, opts, queryEmbedding);
   const vectorMs = Date.now() - vectorStart;
 
-  return { results, embedMs, vectorMs };
+  return { results, embedMs, vectorMs, rawScores };
 }
 
-function resolveAutoMode(opts: SearchOptions): ResolvedSearchMode {
-  const { query, fromAddress, afterDate, beforeDate } = opts;
-  if (!query?.trim()) return "filter";
-
-  if (fromAddress || afterDate || beforeDate) return "fts";
-
-  const q = query.trim();
-  const tokenCount = q.split(/\s+/).filter(Boolean).length;
-  const looksLikeEmail = /@/.test(q);
-  const looksLikeDate = /^\d{4}-\d{2}-\d{2}$/.test(q);
-  const looksLikeId = /(^<[^>]+>$)|([A-Za-z0-9._%+-]+\/[A-Za-z0-9._%+-]+)/.test(q);
-
-  if (looksLikeEmail || looksLikeDate || looksLikeId || tokenCount <= 4) {
-    return "fts";
-  }
-
-  return "hybrid";
-}
-
-function resolveMode(opts: SearchOptions): ResolvedSearchMode {
-  if (!opts.query?.trim()) return "filter";
-  if (!opts.mode) return resolveAutoMode(opts);
-  if (opts.mode === "auto") return resolveAutoMode(opts);
-  return opts.mode;
-}
+// resolveMode function removed - no longer needed since we always use hybrid unless fts flag is set
 
 /**
  * Generate a simple text snippet for semantic search results.
@@ -404,42 +395,60 @@ export async function searchWithMeta(
   const { limit = 20, offset = 0 } = effectiveOpts;
   const hasFilters = !!(effectiveOpts.fromAddress || effectiveOpts.toAddress || effectiveOpts.subject || effectiveOpts.afterDate || effectiveOpts.beforeDate);
   
-  // Update query in opts for mode resolution and search functions
+  // Update query in opts for search functions
   effectiveOpts.query = parsedQuery;
   
-  const modeUsed = resolveMode(effectiveOpts);
   const timings: SearchTimings = {
     totalMs: 0,
-    modeUsed,
   };
 
   if (!parsedQuery?.trim() && hasFilters) {
     const results = filterOnlySearch(db, effectiveOpts);
     timings.totalMs = Date.now() - startedAt;
-    return { results, timings };
+    return {
+      results,
+      timings,
+      _meta: {
+        hasFtsMatches: results.length > 0,
+        hasSemanticOnlyMatches: false,
+        hasAnyMatches: results.length > 0,
+      },
+    };
   }
 
   if (!parsedQuery?.trim()) {
     timings.totalMs = Date.now() - startedAt;
-    return { results: [], timings };
+    return {
+      results: [],
+      timings,
+      _meta: {
+        hasFtsMatches: false,
+        hasSemanticOnlyMatches: false,
+        hasAnyMatches: false,
+      },
+    };
   }
 
-  if (modeUsed === "fts") {
+  // Determine search mode: FTS-only if fts flag is set, otherwise hybrid
+  const useFtsOnly = effectiveOpts.fts === true;
+
+  if (useFtsOnly) {
     const ftsStart = Date.now();
     const results = ftsSearch(db, effectiveOpts);
     timings.ftsMs = Date.now() - ftsStart;
     timings.totalMs = Date.now() - startedAt;
-    return { results, timings };
+    return {
+      results,
+      timings,
+      _meta: {
+        hasFtsMatches: results.length > 0,
+        hasSemanticOnlyMatches: false,
+        hasAnyMatches: results.length > 0,
+      },
+    };
   }
 
-  if (modeUsed === "semantic") {
-    const semantic = await vectorSearchWithTimings(db, effectiveOpts);
-    timings.embedMs = semantic.embedMs;
-    timings.vectorMs = semantic.vectorMs;
-    timings.totalMs = Date.now() - startedAt;
-    return { results: semantic.results, timings };
-  }
-
+  // Default: hybrid search (semantic + FTS)
   const semanticPromise = vectorSearchWithTimings(db, effectiveOpts);
   const ftsStart = Date.now();
   const ftsResults = ftsSearch(db, effectiveOpts);
@@ -449,18 +458,24 @@ export async function searchWithMeta(
   timings.vectorMs = semantic.vectorMs;
   const semanticResults = semantic.results;
 
+  // Track which results came from FTS vs semantic-only
+  const ftsMessageIds = new Set(ftsResults.map((r) => r.messageId));
+  const semanticOnlyMessageIds = new Set(
+    semanticResults.map((r) => r.messageId).filter((id) => !ftsMessageIds.has(id))
+  );
+
   // Create maps for RRF scoring
   const ftsRankMap = new Map(ftsResults.map((r, idx) => [r.messageId, idx + 1]));
   const semanticRankMap = new Map(semanticResults.map((r, idx) => [r.messageId, idx + 1]));
 
   const mergeStart = Date.now();
   // Combine and deduplicate by messageId
-  const combined = new Map<string, SearchResult & { rrfScore: number }>();
+  const combined = new Map<string, SearchResult & { rrfScore: number; hasFtsMatch: boolean }>();
 
   // Add FTS results
   for (const result of ftsResults) {
     const rrfScore = 1 / (60 + (ftsRankMap.get(result.messageId) ?? 1000));
-    combined.set(result.messageId, { ...result, rrfScore });
+    combined.set(result.messageId, { ...result, rrfScore, hasFtsMatch: true });
   }
 
   // Add semantic results, merging with existing
@@ -470,9 +485,10 @@ export async function searchWithMeta(
       // Merge: keep FTS snippet (better for keyword matches), combine RRF scores
       const semanticRrf = 1 / (60 + (semanticRankMap.get(result.messageId) ?? 1000));
       existing.rrfScore += semanticRrf;
+      // Already has FTS match, keep hasFtsMatch: true
     } else {
       const semanticRrf = 1 / (60 + (semanticRankMap.get(result.messageId) ?? 1000));
-      combined.set(result.messageId, { ...result, rrfScore: semanticRrf });
+      combined.set(result.messageId, { ...result, rrfScore: semanticRrf, hasFtsMatch: false });
     }
   }
 
@@ -484,8 +500,21 @@ export async function searchWithMeta(
   timings.mergeMs = Date.now() - mergeStart;
   timings.totalMs = Date.now() - startedAt;
 
-  // Remove rrfScore from final results
-  return { results: sorted.map(({ rrfScore, ...rest }) => rest), timings };
+  // Track metadata for hint generation: do we have FTS matches, semantic-only matches, or neither?
+  const hasFtsMatches = ftsResults.length > 0;
+  const hasSemanticOnlyMatches = semanticOnlyMessageIds.size > 0;
+  const hasAnyMatches = sorted.length > 0;
+
+  // Remove rrfScore and hasFtsMatch from final results
+  return {
+    results: sorted.map(({ rrfScore, hasFtsMatch, ...rest }) => rest),
+    timings,
+    _meta: {
+      hasFtsMatches,
+      hasSemanticOnlyMatches,
+      hasAnyMatches,
+    },
+  };
 }
 
 // Legacy exports for backwards compatibility (deprecated, will be removed)
@@ -494,6 +523,7 @@ export async function semanticSearch(db: SqliteDatabase, opts: SearchOptions): P
 }
 
 export async function hybridSearch(db: SqliteDatabase, opts: SearchOptions): Promise<SearchResult[]> {
-  const result = await searchWithMeta(db, { ...opts, mode: "hybrid" });
+  // Hybrid is now the default, so just call searchWithMeta without fts flag
+  const result = await searchWithMeta(db, { ...opts, fts: false });
   return result.results;
 }

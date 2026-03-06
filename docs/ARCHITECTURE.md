@@ -459,7 +459,7 @@ This replaces timestamp-based staleness detection. PID checks are instantaneous 
 
 **Progressive availability:** Synced messages are immediately available for FTS5/keyword search and direct fetch. Semantic search becomes available progressively as the indexer catches up — like a database serving queries while building an index in the background.
 
-**Mode-aware search.** Search supports `auto|fts|semantic|hybrid`. `auto` selects a fast lexical path for clear metadata/keyword intent and uses hybrid for broader semantic intent. Hybrid still uses FTS5 + semantic search with Reciprocal Rank Fusion (RRF). Messages that have not been embedded remain discoverable through FTS.
+**Hybrid search by default.** Search uses hybrid (semantic + FTS5) by default, combining results with Reciprocal Rank Fusion (RRF). Use `--fts` flag for FTS-only (exact keyword matching). Messages that have not been embedded remain discoverable through FTS.
 
 **Observability:**
 - Both subsystems track progress in the DB (`sync_summary`, `indexing_status`).

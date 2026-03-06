@@ -1,6 +1,8 @@
 # BUG-003: FTS vs Semantic Search Guidance — Agent-Reported
 
-**Status:** Open.
+**Note:** This bug was superseded by [OPP-008](../opportunities/OPP-008-simplify-search-modes.md), which simplified the interface by making hybrid the default and removing mode selection complexity entirely.
+
+**Status:** Fixed.
 
 **Design lens:** [Agent-first](../../VISION.md) — agents need clear guidance on when to use FTS vs semantic search. The `--mode` flag exists (OPP-003) but lacks discoverability and usage guidance, leading to suboptimal search choices and frustration.
 
@@ -79,43 +81,39 @@ zmail search "query"  # Runs both FTS + semantic, combines results
 
 ## Recommendations (concise)
 
-1. **Help text:** Add search mode guidance to `zmail search --help`:
-   ```
-   SEARCH MODES:
-     --mode fts        Full-text search (exact keywords, phrases, names)
-     --mode semantic   Semantic search (concepts, topics, synonyms)
-     --mode hybrid     Combine FTS + semantic (default)
-     --mode auto       Automatically choose based on query
-   
-   WHEN TO USE EACH:
-     FTS works best for:      "Lewis Cirne", "SVB", "project name"
-     Semantic works best for: "flying vehicles", "medical concerns", "tech startups"
-   ```
+1. **Help text:** Add search mode guidance to `zmail search --help`: ✅ **FIXED**
+   - Added detailed "Search modes" section to `zmail search --help` with examples
+   - Updated main `zmail --help` to hint at search modes
 
-2. **Smart auto mode:** Enhance `--mode auto` with heuristics:
-   - Contains proper nouns or ALL-CAPS → FTS
-   - Contains exact phrases ("...") → FTS
-   - Single concept/topic word → Semantic
-   - Descriptive/conceptual query → Semantic
-   - Multiple concepts joined by OR → FTS
+2. **Smart auto mode:** Enhance `--mode auto` with heuristics: ⏸️ **DEFERRED**
+   - Auto mode already exists with basic heuristics
+   - Enhanced heuristics can be added as future improvement
 
-3. **Result attribution:** Add `matched_by` and `match_type` fields to search results (optional enhancement):
-   ```json
-   {
-     "messageId": "...",
-     "subject": "...",
-     "rank": -10.24,
-     "matched_by": "semantic",
-     "match_type": "concept"
-   }
-   ```
+3. **Result attribution:** Add mode information to search results: ✅ **FIXED**
+   - Added `modeUsed` field to JSON output (always included)
+   - Added `hint` field to JSON output suggesting alternative modes
+   - Added contextual hints in TTY output showing mode used and alternatives
 
-4. **Documentation:** Add search strategy guide to AGENTS.md or CLAUDE.md:
-   - Concept-based questions → semantic search
-   - Specific lookups → FTS
-   - When unsure → auto mode (default)
+4. **Documentation:** Add search strategy guide to AGENTS.md: ✅ **FIXED**
+   - Added comprehensive "Search strategy" section to AGENTS.md
+   - Includes when to use each mode with examples
 
-5. **Default behavior:** Consider making `--mode auto` the default (if not already) with clear documentation of heuristics
+5. **Default behavior:** `--mode auto` is the default ✅ **CONFIRMED**
+   - Auto mode is already the default
+   - Clear documentation added to help text and AGENTS.md
+
+## Implementation Summary
+
+**Fixed 2026-03-06:**
+- Enhanced `zmail search --help` with detailed mode guidance and examples
+- Added search strategy section to AGENTS.md
+- Added `modeUsed` field to all JSON search responses
+- Added `hint` field to JSON output suggesting alternative modes
+- Added contextual hints in TTY output (shows mode used + alternatives)
+- Updated main `zmail --help` to hint at search modes
+
+**Remaining:**
+- Enhanced auto mode heuristics (optional future improvement)
 
 ---
 

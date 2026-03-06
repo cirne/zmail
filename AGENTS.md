@@ -116,6 +116,10 @@ zmail provides two interfaces for agents, both accessing the same SQLite index:
 
 See [`docs/MCP.md`](docs/MCP.md) for MCP server documentation and tool reference.
 
+## Search
+
+Search uses hybrid (semantic + FTS) by default for comprehensive results. Use `--fts` for exact keyword matching only.
+
 ## Configuration
 
 zmail stores configuration in `~/.zmail/` (or `$ZMAIL_HOME` if set):
