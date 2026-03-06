@@ -36,14 +36,14 @@ warn() {
 # Check for Node.js
 check_node() {
     if ! command -v node &> /dev/null; then
-        error "Node.js is not installed. Please install Node.js 22+ first:\n  https://nodejs.org/"
+        error "Node.js is not installed. Please install Node.js 20+ first:\n  https://nodejs.org/"
     fi
     
     NODE_VERSION=$(node -v | sed 's/v//')
     NODE_MAJOR=$(echo "$NODE_VERSION" | cut -d. -f1)
     
-    if [ "$NODE_MAJOR" -lt 22 ]; then
-        error "Node.js 22+ is required. You have Node.js $NODE_VERSION. Please upgrade:\n  https://nodejs.org/"
+    if [ "$NODE_MAJOR" -lt 20 ]; then
+        error "Node.js 20+ is required. You have Node.js $NODE_VERSION. Please upgrade:\n  https://nodejs.org/"
     fi
     
     success "Node.js $NODE_VERSION detected"

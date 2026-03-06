@@ -19,13 +19,13 @@
 - Publish to npm with a `bin` that points to a script with shebang `#!/usr/bin/env bun`.
 - User runs `npm i -g @cirne/zmail` or `bun install -g @cirne/zmail`; when they run `zmail`, the OS invokes Bun with that script.
 - **Pros:** No compile step → avoids binary-only bugs; same codebase as dev; familiar install for the audience.
-- **Cons:** User must have **Bun** installed and on PATH. Node version only matters for the npm client (e.g. Node 18+); runtime is Bun.
+- **Cons:** User must have **Bun** installed and on PATH. Node version only matters for the npm client (e.g. Node 22+); runtime is Bun. *(Historical option — not chosen)*
 
 ### 2. npm i -g (run with Node) — recommended
 
 - Port the app to run on **Node**: replace Bun-only APIs, distribute via npm with `#!/usr/bin/env node` (or run compiled JS).
 - User runs `npm i -g @cirne/zmail`; only Node is required (no Bun).
-- **Pros:** Single runtime that virtually every dev has; aligns with OpenClaw (`npm i -g openclaw`, Node 22+), Claude Code (`npm i -g claude`, Node 18+); no binary build at all.
+- **Pros:** Single runtime that virtually every dev has; aligns with OpenClaw (`npm i -g openclaw`, Node 22+), Claude Code (`npm i -g claude`, Node 18+); no binary build at all. *(Chosen option)*
 - **Cons:** One-time port (see below). Slightly slower cold start than a native binary (usually negligible for CLI tool-use).
 
 ### 3. Homebrew
@@ -44,7 +44,7 @@
 ## Recommendation (implemented)
 
 - **Ditch the binary** as the primary distribution artifact.
-- **Distribute via npm** so that `npm i -g @cirne/zmail` (or TBD scoped name; unscoped `zmail` is taken on npm) is the canonical install. This matches OpenClaw and Claude Code and fits the target user.
+- **Distribute via npm** so that `npm i -g @cirne/zmail` (scoped package name; unscoped `zmail` is taken on npm) is the canonical install. This matches OpenClaw and Claude Code and fits the target user.
 - **Prefer Node over Bun for the installed CLI** so that users do not need Bun at all: document “Node 18+” (or 20+), same as typical npm CLIs. Bun was chosen for native TS and binary; if we drop the binary, the benefit of requiring Bun at runtime is small.
 
 ---

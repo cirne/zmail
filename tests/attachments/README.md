@@ -5,7 +5,7 @@ Automated tests for document-to-text extraction across all supported formats.
 ## Running tests
 
 ```bash
-bun test tests/attachments/extractors.test.ts
+npm test tests/attachments/extractors.test.ts
 ```
 
 ## Test fixtures (`fixtures/`)
@@ -27,7 +27,7 @@ Real-world files used for extraction testing:
 Test extraction on any file:
 
 ```bash
-bun run tests/attachments/test-extract.ts <file-path>
+npx tsx tests/attachments/test-extract.ts <file-path>
 ```
 
 ## Test against real email attachments

@@ -12,7 +12,7 @@ Modern email systems are human-first — designed around inbox browsing and manu
 
 ## Quick start
 
-1. **Install**
+1. **Install** (see [AGENTS.md](AGENTS.md) for full installation options)
    ```bash
    curl -fsSL https://raw.githubusercontent.com/cirne/zmail/main/install.sh | bash
    ```
@@ -24,23 +24,39 @@ Modern email systems are human-first — designed around inbox browsing and manu
 
 2. **Run interactive setup**
    ```bash
-   bun run src/index.ts setup
+   zmail setup
+   ```
+   Or from the repo:
+   ```bash
+   npm run zmail -- setup
    ```
    This creates `~/.zmail/config.json` and `~/.zmail/.env` with your IMAP credentials and OpenAI API key. The setup command validates credentials and guides you through the process.
 
 3. **Initial sync (example: last 7 days)**
    ```bash
-   bun run src/index.ts sync --since 7d
+   zmail sync --since 7d
+   ```
+   Or from the repo:
+   ```bash
+   npm run zmail -- sync --since 7d
    ```
    
    **Refresh (fetch new messages):**
    ```bash
-   bun run src/index.ts refresh
+   zmail refresh
+   ```
+   Or from the repo:
+   ```bash
+   npm run zmail -- refresh
    ```
 
 4. **Search (header-first default)**
    ```bash
-   bun run src/index.ts search "apple receipt after:30d" --json
+   zmail search "apple receipt after:30d" --json
+   ```
+   Or from the repo:
+   ```bash
+   npm run zmail -- search "apple receipt after:30d" --json
    ```
 
 ## CLI
@@ -81,12 +97,17 @@ zmail intentionally does not run automatic migrations on existing local DBs. If 
 
 ```bash
 rm -rf ~/.zmail/data/
-bun run src/index.ts sync --since 7d
+zmail sync --since 7d
 ```
 
 ## Architecture
 
-Built with TypeScript + Bun. All data stored locally on a persistent volume — no cloud sync service, no third-party access to your email. Storage layout and technical decisions: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Product vision: [`docs/VISION.md`](docs/VISION.md).
+Built with TypeScript + Node.js 20+. All data stored locally on a persistent volume — no cloud sync service, no third-party access to your email. 
+
+**Documentation:**
+- [`AGENTS.md`](AGENTS.md) — single source of truth for installation, commands, and development
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — technical decisions and rationale
+- [`docs/VISION.md`](docs/VISION.md) — product vision
 
 ## Status
 

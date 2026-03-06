@@ -1,6 +1,6 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 // Dev utility: wipe local data and start fresh
-// Usage: bun run scripts/reset.ts
+// Usage: npm run reset (or: npx tsx scripts/reset.ts)
 
 import { rmSync, existsSync } from "fs";
 import { config } from "~/lib/config";
@@ -15,4 +15,4 @@ for (const target of targets) {
   }
 }
 
-logger.info("Local data cleared. Run `bun run dev` to start fresh.");
+logger.info("Local data cleared. Run `npm run dev` to start fresh.");

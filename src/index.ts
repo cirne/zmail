@@ -33,19 +33,14 @@ if (command === "setup") {
   process.exit(0);
 }
 
-// Check for config before proceeding
-if (!hasConfig()) {
-  console.error("No config found. Run 'zmail setup' first.");
-  process.exit(1);
-}
-
-if (command) {
-  try {
-    await import("~/cli");
-  } catch (err) {
-    handleMissingConfig(err);
+// If no command provided, check for config first
+if (!command) {
+  if (!hasConfig()) {
+    console.log(CLI_USAGE);
+    console.error("\nNo config found. Run 'zmail setup' first.");
+    process.exit(1);
   }
-} else {
+  // Config exists, start sync
   try {
     const { runSync } = await import("~/sync");
     const { logger } = await import("~/lib/logger");
@@ -53,6 +48,18 @@ if (command) {
     runSync().catch((err) => {
       logger.error("Sync daemon crashed", { error: String(err) });
     });
+  } catch (err) {
+    handleMissingConfig(err);
+  }
+  // Don't exit here - sync runs in background
+} else {
+  // Command provided, check for config before proceeding
+  if (!hasConfig()) {
+    console.error("No config found. Run 'zmail setup' first.");
+    process.exit(1);
+  }
+  try {
+    await import("~/cli");
   } catch (err) {
     handleMissingConfig(err);
   }

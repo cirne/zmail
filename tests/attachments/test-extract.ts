@@ -1,7 +1,7 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * Test script for attachment extraction.
- * Usage: bun run tests/attachments/test-extract.ts <file-path>
+ * Usage: npx tsx tests/attachments/test-extract.ts <file-path>
  */
 
 import { readFileSync } from "fs";
@@ -11,7 +11,7 @@ import { extractAttachment } from "~/attachments";
 const filePath = process.argv[2];
 
 if (!filePath) {
-  console.error("Usage: bun run tests/attachments/test-extract.ts <file-path>");
+  console.error("Usage: npx tsx tests/attachments/test-extract.ts <file-path>");
   process.exit(1);
 }
 

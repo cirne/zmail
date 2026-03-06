@@ -63,6 +63,17 @@ describe("entrypoint onboarding", () => {
   });
 
   describe("missing config", () => {
+    it("no args without config.json prints usage and error, exits 1", async () => {
+      // Use a non-existent ZMAIL_HOME to ensure no config exists
+      const env = { ...process.env, ZMAIL_HOME: "/tmp/zmail-nonexistent-" + Date.now() };
+      const { stdout, stderr, exitCode } = await runEntrypoint([], env);
+      expect(exitCode).toBe(1);
+      const combined = stdout + stderr;
+      expect(combined).toContain("Usage:");
+      expect(combined).toContain("zmail setup");
+      expect(combined).toContain("No config found");
+    });
+
     it("search without config.json prints error and exits 1", async () => {
       // Use a non-existent ZMAIL_HOME to ensure no config exists
       const env = { ...process.env, ZMAIL_HOME: "/tmp/zmail-nonexistent-" + Date.now() };
