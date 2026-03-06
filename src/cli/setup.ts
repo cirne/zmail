@@ -377,7 +377,7 @@ ZMAIL_OPENAI_API_KEY=${apiKey}
       
       console.log("Sync started in background. Use 'zmail status' to check progress.");
     } else {
-      console.log("Run `zmail sync --since 7d` to start syncing.");
+      console.log("Run `zmail sync --since 7d` to start initial sync, then `zmail update` for frequent updates.");
     }
     console.log("");
   } finally {

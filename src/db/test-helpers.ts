@@ -24,6 +24,8 @@ export function insertTestMessage(
     toAddresses: string;
     ccAddresses: string;
     date: string;
+    folder: string;
+    uid: number;
   }> = {}
 ): string {
   const messageId =
@@ -35,12 +37,14 @@ export function insertTestMessage(
   const toAddresses = overrides.toAddresses ?? "[]";
   const ccAddresses = overrides.ccAddresses ?? "[]";
   const date = overrides.date ?? new Date().toISOString();
+  const folder = overrides.folder ?? "[Gmail]/All Mail";
+  const uid = overrides.uid ?? 1;
 
   db.run(
     `INSERT INTO messages
        (message_id, thread_id, folder, uid, from_address, to_addresses, cc_addresses, subject, body_text, date, raw_path)
-     VALUES (?, ?, '[Gmail]/All Mail', 1, ?, ?, ?, ?, ?, ?, 'maildir/test.eml')`,
-    [messageId, threadId, fromAddress, toAddresses, ccAddresses, subject, bodyText, date]
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'maildir/test.eml')`,
+    [messageId, threadId, folder, uid, fromAddress, toAddresses, ccAddresses, subject, bodyText, date]
   );
 
   return messageId;

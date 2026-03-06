@@ -23,9 +23,14 @@ Modern email systems are human-first — designed around inbox browsing and manu
    ```
    This creates `~/.zmail/config.json` and `~/.zmail/.env` with your IMAP credentials and OpenAI API key. The setup command validates credentials and guides you through the process.
 
-3. **Sync + index (example: last 7 days)**
+3. **Initial sync (example: last 7 days)**
    ```bash
    bun run src/index.ts sync --since 7d
+   ```
+   
+   **Update (fetch new messages):**
+   ```bash
+   bun run src/index.ts update
    ```
 
 4. **Search (header-first default)**
@@ -36,7 +41,9 @@ Modern email systems are human-first — designed around inbox browsing and manu
 ## CLI
 
 ```bash
-zmail sync [--since <spec>]
+zmail sync [--since <spec>]     # Initial sync: fill gaps going backward
+zmail update                     # Update: fetch new messages since last sync
+zmail refresh                   # Alias for 'update'
 zmail search <query> [--mode auto|fts|semantic|hybrid]
                   [--detail headers|snippet|body]
                   [--fields <csv>] [--ids-only] [--timings]

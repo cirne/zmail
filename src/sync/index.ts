@@ -16,6 +16,8 @@ function getSyncMailbox(host: string): string {
 export interface SyncOptions {
   /** Relative since spec (e.g. 7d, 5w, 3m, 2y). Overrides DEFAULT_SYNC_SINCE env var when set. */
   since?: string;
+  /** Sync direction: 'forward' (newest first, for updates) or 'backward' (oldest first, for backfill). Default: 'forward' */
+  direction?: 'forward' | 'backward';
 }
 
 export interface SyncResult {
@@ -145,23 +147,181 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
     const lock = await client.getMailboxLock(mailbox);
     try {
       const mailboxObj = client.mailbox;
-      const uidvalidity = mailboxObj && typeof mailboxObj === "object" ? mailboxObj.uidValidity ?? 0 : 0;
-      const searchResult = await client.search({ since: sinceDate }, { uid: true });
-      const allUids = Array.isArray(searchResult) ? searchResult : [];
-
-      // Incremental sync (ADR-003): only fetch UIDs we don't have yet
-      const state = db.query("SELECT uidvalidity, last_uid FROM sync_state WHERE folder = ?").get(mailbox) as
-        | { uidvalidity: number; last_uid: number }
+      const uidvalidity = mailboxObj && typeof mailboxObj === "object" ? Number(mailboxObj.uidValidity ?? 0) : 0;
+      
+      // Incremental sync (ADR-003): use UID range search when we have a checkpoint
+      // This avoids fetching all UIDs since a date and filtering client-side
+      const stateRow = db.query("SELECT uidvalidity, last_uid FROM sync_state WHERE folder = ?").get(mailbox) as
+        | { uidvalidity: number | bigint; last_uid: number | bigint }
         | undefined;
-      const uids =
-        state && state.uidvalidity === uidvalidity && state.last_uid > 0
-          ? allUids.filter((uid) => uid > state.last_uid)
-          : allUids;
-      if (state && state.uidvalidity === uidvalidity && state.last_uid > 0) {
-        logger.info("Incremental sync", { folder: mailbox, newUids: uids.length, lastUid: state.last_uid });
+      // Normalize to numbers (SQLite may return BigInt)
+      const state = stateRow ? {
+        uidvalidity: Number(stateRow.uidvalidity),
+        last_uid: Number(stateRow.last_uid),
+      } : undefined;
+      
+      const direction = options?.direction ?? 'forward';
+      let searchQuery: { since?: Date; uid?: string; before?: Date };
+      let uids: number[];
+      
+      if (state && state.uidvalidity === uidvalidity && state.last_uid > 0 && direction === 'forward') {
+        // Forward sync (update/refresh): use UID range search for new messages
+        // UID range 'N:*' means "UIDs >= N", so we use last_uid + 1 to get UIDs > last_uid
+        searchQuery = { uid: `${state.last_uid + 1}:*` };
+        const searchResult = await client.search(searchQuery, { uid: true });
+        uids = Array.isArray(searchResult) ? searchResult : [];
+        logger.info("Forward sync (new messages)", { folder: mailbox, newUids: uids.length, lastUid: state.last_uid });
       } else {
-        logger.info("Messages to sync", { folder: mailbox, count: uids.length, since: fromDate });
+        // Backward sync (continue syncing) or initial sync: use date-based search
+        // For backward sync, resume from the oldest already-synced message to avoid re-checking everything
+        let effectiveSinceDate = sinceDate;
+        let effectiveSinceDateStr = fromDate;
+        
+        if (direction === 'backward') {
+          // Find the oldest message we've already synced
+          const oldestSynced = db.query("SELECT MIN(date) as oldest_date FROM messages WHERE folder = ?").get(mailbox) as
+            | { oldest_date: string | null }
+            | undefined;
+          
+          if (oldestSynced?.oldest_date) {
+            const oldestDate = new Date(oldestSynced.oldest_date);
+            const oldestDateStr = oldestSynced.oldest_date.slice(0, 10); // YYYY-MM-DD
+            
+            if (!isNaN(oldestDate.getTime())) {
+              // Compare dates at day level (ignore time)
+              const oldestDay = oldestDateStr;
+              const requestedDay = fromDate;
+              
+              if (oldestDay > requestedDay) {
+                // We've already synced messages from a day newer than requested
+                // Resume from the oldest synced date (same day is OK - allows catching gaps from interrupted syncs)
+                effectiveSinceDate = new Date(oldestDateStr + "T00:00:00Z");
+                effectiveSinceDateStr = oldestDateStr;
+                
+                // If we have a last_uid checkpoint, use UID-based filtering to avoid re-fetching messages we already have
+                // This is much more efficient than fetching all messages from the day and deduplicating
+                if (state && Number(state.uidvalidity) === uidvalidity && Number(state.last_uid) > 0) {
+                  // For backward sync, we want messages older than what we've synced
+                  // But we still need to search the same day to catch gaps, so we'll filter by UID
+                  // Search for messages in the date range, but we'll filter UIDs after getting results
+                  searchQuery = { since: effectiveSinceDate };
+                  
+                  logger.info("Resuming backward sync from oldest synced date with UID filtering", {
+                    requestedSince: fromDate,
+                    oldestSynced: oldestDateStr,
+                    resumingFrom: effectiveSinceDateStr,
+                    lastUid: state.last_uid,
+                    note: "Will filter UIDs <= last_uid to avoid re-fetching already-synced messages",
+                  });
+                } else {
+                  searchQuery = { since: effectiveSinceDate };
+                  
+                  logger.info("Resuming backward sync from oldest synced date", {
+                    requestedSince: fromDate,
+                    oldestSynced: oldestDateStr,
+                    resumingFrom: effectiveSinceDateStr,
+                    note: "No UID checkpoint - will fetch and deduplicate",
+                  });
+                }
+              } else if (oldestDay === requestedDay) {
+                // Same day - use UID filtering if available to avoid re-fetching everything
+                if (state && Number(state.uidvalidity) === uidvalidity && Number(state.last_uid) > 0) {
+                  searchQuery = { since: effectiveSinceDate };
+                } else {
+                  searchQuery = { since: effectiveSinceDate };
+                }
+              } else {
+                // Oldest synced is before requested date - use requested date
+                searchQuery = { since: effectiveSinceDate };
+                logger.info("Syncing from requested date", {
+                  requestedSince: fromDate,
+                  oldestSynced: oldestDateStr,
+                });
+              }
+            } else {
+              searchQuery = { since: effectiveSinceDate };
+            }
+          } else {
+            // No messages synced yet, use normal search
+            searchQuery = { since: effectiveSinceDate };
+          }
+        } else {
+          searchQuery = { since: effectiveSinceDate };
+        }
+        const searchResult = await client.search(searchQuery, { uid: true });
+        uids = Array.isArray(searchResult) ? searchResult : [];
+        if (direction === 'backward') {
+          logger.info("Backward sync (filling gaps)", {
+            folder: mailbox,
+            count: uids.length,
+            since: effectiveSinceDateStr,
+            requestedSince: fromDate,
+          });
+        } else {
+          logger.info("Messages to sync", { folder: mailbox, count: uids.length, since: fromDate });
+        }
       }
+      
+      // For backward sync: if we're searching the same day as oldest synced and all UIDs are <= last_uid,
+      // we've already synced everything from that day. Skip to searching before that date.
+      if (direction === 'backward' && state && state.uidvalidity === uidvalidity && state.last_uid > 0) {
+        const allUidsAreSynced = uids.length > 0 && uids.every((uid) => uid <= state.last_uid);
+        
+        if (allUidsAreSynced) {
+          // All UIDs from this search are already synced - we've completed this day
+          // Search for messages before the oldest synced date instead
+          const oldestSynced = db.query("SELECT MIN(date) as oldest_date FROM messages WHERE folder = ?").get(mailbox) as
+            | { oldest_date: string | null }
+            | undefined;
+          
+          if (oldestSynced?.oldest_date) {
+            const oldestDate = new Date(oldestSynced.oldest_date);
+            const dayBeforeOldest = new Date(oldestDate);
+            dayBeforeOldest.setDate(dayBeforeOldest.getDate() - 1);
+            
+            // Only search before if it's still within the requested range
+            if (dayBeforeOldest >= sinceDate) {
+              logger.info("All messages from this day already synced - searching before oldest synced date", {
+                oldestSynced: oldestSynced.oldest_date.slice(0, 10),
+                searchingBefore: dayBeforeOldest.toISOString().slice(0, 10),
+                skippedUids: uids.length,
+              });
+              
+              // Re-search with before constraint
+              searchQuery = {
+                since: sinceDate,
+                before: dayBeforeOldest,
+              } as { since: Date; before: Date };
+              const searchResult = await client.search(searchQuery, { uid: true });
+              uids = Array.isArray(searchResult) ? searchResult : [];
+            } else {
+              // Day before oldest is before requested date - nothing more to sync
+              logger.info("All messages from requested date range already synced", {
+                oldestSynced: oldestSynced.oldest_date.slice(0, 10),
+                requestedSince: fromDate,
+              });
+              uids = [];
+            }
+          }
+        } else {
+          // Some UIDs might be new - filter to only those we haven't synced yet
+          const beforeFilter = uids.length;
+          uids = uids.filter((uid) => uid > state.last_uid);
+          const filtered = beforeFilter - uids.length;
+          
+          if (filtered > 0) {
+            logger.info("Filtered UIDs using last_uid checkpoint", {
+              beforeFilter,
+              afterFilter: uids.length,
+              filtered,
+            });
+          }
+        }
+      }
+      
+      // Sort UIDs: always newest first (descending) so most recent messages arrive first
+      // This applies to both forward and backward sync for better UX
+      uids.sort((a, b) => b - a); // Highest UID = most recent
 
       if (uids.length === 0) {
         db.run("UPDATE sync_summary SET last_sync_at = datetime('now') WHERE id = 1");
@@ -209,12 +369,16 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
           }),
         ]);
         clearTimeout(fetchTimeoutId);
+        const fetchDuration = Date.now() - fetchStart;
         logger.info("fetchAll done", {
           batch: `${batchNum}/${totalBatches}`,
           messages: messages.length,
-          elapsedMs: Date.now() - fetchStart,
+          elapsedMs: fetchDuration,
         });
 
+        let batchDuplicates = 0;
+        let batchNew = 0;
+        
         for (const msg of messages) {
           const raw = msg.source;
           if (!raw || !Buffer.isBuffer(raw)) continue;
@@ -244,10 +408,24 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
             continue;
           }
 
+          const duplicateCheckStart = Date.now();
           const existing = db.query("SELECT 1 FROM messages WHERE message_id = ?").get(parsed.messageId);
+          const duplicateCheckDuration = Date.now() - duplicateCheckStart;
+          
           if (existing) {
+            batchDuplicates++;
+            logger.debug("Skipping duplicate", {
+              uid,
+              messageId: parsed.messageId,
+              date: parsed.date,
+              checkDurationMs: duplicateCheckDuration,
+            });
             continue; // Already in DB; skip write and insert (saves disk I/O and avoids overwriting)
           }
+          
+          batchNew++;
+          
+          synced++; // Increment before logging so order is accurate
 
           const filename = safeFilename(uid, parsed.messageId);
           const relPath = join("cur", filename);
@@ -303,13 +481,24 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
             }
           }
 
-          synced++;
+          // synced++ moved earlier (before logging)
           if (!earliestDate || parsed.date < earliestDate) earliestDate = parsed.date;
           if (!latestDate || parsed.date > latestDate) latestDate = parsed.date;
+        }
+        
+        // Log progress every 100 messages or at batch boundaries
+        if (synced % 100 === 0 && synced > 0) {
+          logger.info("Sync progress", {
+            synced,
+            messagesFetched,
+            duplicates: batchDuplicates,
+          });
         }
 
         // Checkpoint after each batch: next run skips these UIDs entirely,
         // even if we crash before the full sync completes.
+        // Always update last_uid to the highest UID we've synced, regardless of direction.
+        // This ensures we don't re-fetch messages we've already synced.
         const batchMaxUid = Math.max(...batch);
         if (batchMaxUid > checkpointUid) {
           checkpointUid = batchMaxUid;

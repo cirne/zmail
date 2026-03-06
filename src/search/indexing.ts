@@ -101,6 +101,7 @@ async function processBatch(
     prepareTextForEmbedding(m.subject, m.body_text),
   );
 
+  let embeddingsAdded = false;
   try {
     const embeddings = await embedBatch(texts);
 
@@ -116,20 +117,57 @@ async function processBatch(
     }
 
     await addEmbeddingsBatch(rows);
+    embeddingsAdded = true;
 
-    const ids = batch.map((m) => m.id).join(",");
+    // Use parameterized query instead of string interpolation
+    const ids = batch.map((m) => m.id);
+    const placeholders = ids.map(() => "?").join(",");
     db.run(
-      `UPDATE messages SET embedding_state = 'done' WHERE id IN (${ids})`,
+      `UPDATE messages SET embedding_state = 'done' WHERE id IN (${placeholders})`,
+      ids
     );
 
     return { indexed: batch.length, failed: 0 };
   } catch (err) {
     logger.error("Embedding batch failed", { error: String(err) });
-    const ids = batch.map((m) => m.id).join(",");
-    db.run(
-      `UPDATE messages SET embedding_state = 'failed' WHERE id IN (${ids})`,
-    );
-    return { indexed: 0, failed: batch.length };
+    
+    // Only mark as failed if embeddings weren't successfully added to LanceDB.
+    // If embeddings were added but UPDATE failed, try to update state anyway.
+    // This handles the case where addEmbeddingsBatch succeeded but UPDATE threw.
+    if (embeddingsAdded) {
+      // Embeddings are in LanceDB, so they're actually indexed.
+      // Try to update SQLite state - if this fails, messages remain in 'claimed'
+      // and will be reset to 'pending' on next run (harmless since embeddings are cached).
+      try {
+        const ids = batch.map((m) => m.id);
+        const placeholders = ids.map(() => "?").join(",");
+        db.run(
+          `UPDATE messages SET embedding_state = 'done' WHERE id IN (${placeholders})`,
+          ids
+        );
+        logger.warn("Recovered from UPDATE failure after embeddings were added", {
+          batchSize: batch.length,
+        });
+        return { indexed: batch.length, failed: 0 };
+      } catch (updateErr) {
+        logger.error("Failed to update state after embeddings were added", {
+          batchSize: batch.length,
+          error: String(updateErr),
+        });
+        // Messages remain in 'claimed' state - will be reset to 'pending' on next run
+        // Since embeddings are in LanceDB, they're effectively indexed
+        return { indexed: batch.length, failed: 0 };
+      }
+    } else {
+      // Embeddings weren't added, so mark as failed
+      const ids = batch.map((m) => m.id);
+      const placeholders = ids.map(() => "?").join(",");
+      db.run(
+        `UPDATE messages SET embedding_state = 'failed' WHERE id IN (${placeholders})`,
+        ids
+      );
+      return { indexed: 0, failed: batch.length };
+    }
   }
 }
 

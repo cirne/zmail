@@ -517,6 +517,10 @@ async function formatMessageForOutput(message: MessageRow, raw: boolean): Promis
 
 /** Token-efficient hint for unknown command so the agent can self-correct. */
 function getUnknownCommandHint(unknownCommand: string): string {
+  // Handle common typos/variations
+  if (unknownCommand === "refresh" || unknownCommand === "update") {
+    return "Did you mean 'zmail update' or 'zmail refresh'?";
+  }
   const c = unknownCommand.toLowerCase();
   if (c === "show" || c === "get" || c === "open" || c === "view") {
     return "Use: zmail read <message_id> to read a message, zmail search \"<query>\" to search.";
@@ -530,11 +534,16 @@ function getUnknownCommandHint(unknownCommand: string): string {
 async function main() {
   switch (command) {
     case "sync": {
+      // Sync: Initial setup, goes backward to fill gaps
+      // Usage: zmail sync [--since <spec>]
       const sinceIdx = args.indexOf("--since");
       const since = sinceIdx >= 0 ? args[sinceIdx + 1] : undefined;
       if (sinceIdx >= 0 && (since === undefined || since.startsWith("-"))) {
         console.error("Usage: zmail sync [--since <spec>]");
         console.error("  --since  relative range: 7d, 5w, 3m, 2y (days, weeks, months, years)");
+        console.error("");
+        console.error("Syncs email going backward from most recent, filling gaps in the specified date range.");
+        console.error("Typically used for initial setup. For frequent updates, use 'zmail update'.");
         process.exit(1);
       }
 
@@ -544,7 +553,13 @@ async function main() {
       let resolveSyncDone!: () => void;
       const syncDone = new Promise<void>((resolve) => { resolveSyncDone = resolve; });
 
-      const syncPromise = runSync(since ? { since } : undefined).then((result) => {
+      // Sync always goes backward (fills gaps from most recent backward)
+      const syncOptions: { since?: string; direction: 'backward' } = {
+        direction: 'backward',
+      };
+      if (since) syncOptions.since = since;
+
+      const syncPromise = runSync(syncOptions).then((result) => {
         resolveSyncDone();
         return result;
       });
@@ -742,6 +757,57 @@ async function main() {
       }
       const shaped = await formatMessageForOutput(message, parsed.raw);
       console.log(formatMessageLlmFriendly(message, shaped));
+      break;
+    }
+
+    case "update":
+    case "refresh": {
+      // Update/Refresh: Frequent updates, brings local copy up to date
+      // Usage: zmail update (or zmail refresh)
+      // No --since needed - uses last_uid checkpoint to fetch only new messages
+
+      // Run sync (bandwidth-bound) and indexing (API-rate-bound) concurrently (ADR-020).
+      let resolveSyncDone!: () => void;
+      const syncDone = new Promise<void>((resolve) => { resolveSyncDone = resolve; });
+
+      // Update always goes forward (fetches new messages since last sync)
+      const syncOptions: { direction: 'forward' } = {
+        direction: 'forward',
+      };
+
+      const syncPromise = runSync(syncOptions).then((result) => {
+        resolveSyncDone();
+        return result;
+      });
+      const indexPromise = indexMessages({ syncDone });
+
+      // Wait for both to complete
+      const [syncResult, indexResult] = await Promise.all([syncPromise, indexPromise]);
+
+      if (syncResult) {
+        const sec = (syncResult.durationMs / 1000).toFixed(2);
+        const mb = (syncResult.bytesDownloaded / (1024 * 1024)).toFixed(2);
+        const kbps = (syncResult.bandwidthBytesPerSec / 1024).toFixed(1);
+        console.log("");
+        console.log("Update metrics:");
+        console.log(`  messages:  ${syncResult.synced} new, ${syncResult.messagesFetched} fetched`);
+        console.log(`  downloaded: ${mb} MB (${syncResult.bytesDownloaded} bytes)`);
+        console.log(`  bandwidth: ${kbps} KB/s`);
+        console.log(`  throughput: ${Math.round(syncResult.messagesPerMinute)} msg/min`);
+        console.log(`  duration:  ${sec}s`);
+      }
+
+      if (indexResult.indexed > 0 || indexResult.failed > 0) {
+        const sec = (indexResult.durationMs / 1000).toFixed(2);
+        console.log("");
+        console.log("Indexing metrics:");
+        console.log(`  indexed:    ${indexResult.indexed}`);
+        if (indexResult.failed > 0) {
+          console.log(`  failed:     ${indexResult.failed}`);
+        }
+        console.log(`  throughput: ${Math.round(indexResult.messagesPerMinute)} msg/min`);
+        console.log(`  duration:  ${sec}s`);
+      }
       break;
     }
 
@@ -972,16 +1038,18 @@ async function main() {
       console.log(`zmail — agent-first email
 
 Usage:
-  zmail sync [--since <spec>]     Sync email + index embeddings (e.g. --since 7d, 5w, 3m, 2y)
-  zmail search <query> [flags]    Search email (see --help for flags)
-  zmail who <query> [flags]       Find people by address or name (see --help for flags)
-  zmail status                    Show sync and indexing status
-  zmail stats                     Show database statistics
-  zmail read <id> [--raw]         Read a message (or: zmail message <id>)
-  zmail thread <id> [--raw]       Fetch thread (Markdown by default; raw .eml with --raw)
-  zmail attachment list <id>     List attachments for a message
-  zmail attachment read <id>      Read/extract attachment (markdown/CSV by default; --raw for binary)
-  zmail mcp                       Start MCP server (stdio)
+  zmail sync [--since <spec>]     Initial sync: fill gaps going backward (e.g. --since 7d, 5w, 3m, 2y)
+  zmail update                     Update: fetch new messages since last sync (frequent updates)
+  zmail refresh                    Alias for 'update'
+  zmail search <query> [flags]     Search email (see --help for flags)
+  zmail who <query> [flags]        Find people by address or name (see --help for flags)
+  zmail status                     Show sync and indexing status
+  zmail stats                      Show database statistics
+  zmail read <id> [--raw]          Read a message (or: zmail message <id>)
+  zmail thread <id> [--raw]        Fetch thread (Markdown by default; raw .eml with --raw)
+  zmail attachment list <id>       List attachments for a message
+  zmail attachment read <id>       Read/extract attachment (markdown/CSV by default; --raw for binary)
+  zmail mcp                        Start MCP server (stdio)
 
 Run 'zmail setup' for setup instructions.
 `);

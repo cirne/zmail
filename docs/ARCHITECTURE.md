@@ -52,11 +52,19 @@ This layout applies to **both Phase 1 and Phase 2 (open source)**. Each user run
 
 ### ADR-003: IMAP Sync Resumption via UID Checkpointing
 
-**Decision:** Sync state is tracked per folder as `{ folder, uidvalidity, last_uid }`.
+**Decision:** Sync state is tracked per folder as `{ folder, uidvalidity, last_uid }`. Two distinct sync modes optimize for different use cases:
+
+1. **Forward sync (`zmail update`):** Uses UID range search (`UID ${last_uid + 1}:*`) to fetch only new messages since last sync. Efficient for frequent updates.
+2. **Backward sync (`zmail sync`):** Resumes from oldest synced date, uses UID filtering to skip already-synced messages. Efficient for initial setup and backfill.
 
 **Rationale:** IMAP UIDs are stable, monotonically increasing identifiers. Checkpointing the last-seen UID per folder allows sync to resume exactly where it left off after a redeploy, crash, or restart — without re-downloading previously synced messages. `UIDVALIDITY` detects the rare case where a folder was wiped and recreated, triggering a full re-sync of that folder.
 
-**Result:** The raw email store (Maildir or R2) is the durable artifact. The index is always rebuildable from the raw store without touching IMAP.
+**Efficiency optimizations:**
+- **Forward sync:** UID range search (`UID N:*`) only queries IMAP for messages we haven't synced yet. Server-side filtering avoids fetching headers for messages we already have.
+- **Backward sync:** When resuming from oldest synced date, if all UIDs from a search are <= `last_uid`, we skip fetching entirely and search before that date instead. This avoids re-fetching 100+ messages we already have when extending a date range.
+- **Same-day safety:** Backward sync allows re-fetching from the same day as oldest synced to catch gaps from interrupted syncs, but uses UID filtering to skip messages we've already synced.
+
+**Result:** The raw email store (Maildir or R2) is the durable artifact. The index is always rebuildable from the raw store without touching IMAP. Both sync modes are optimized to avoid unnecessary fetches while maintaining correctness.
 
 ---
 
@@ -77,7 +85,9 @@ This layout applies to **both Phase 1 and Phase 2 (open source)**. Each user run
 
 **CLI commands:**
 ```
-zmail sync [--since <spec>]     ← sync + concurrent indexing
+zmail sync [--since <spec>]     ← Initial sync: fill gaps going backward (e.g. --since 7d, 5w, 3m, 2y)
+zmail update                     ← Update: fetch new messages since last sync (frequent updates)
+zmail refresh                    ← Alias for 'update'
 zmail search <query> [flags]    ← header-first search with mode/detail controls
                                   Query supports inline operators: from:, to:, subject:, after:, before:
                                   Example: zmail search "from:alice@example.com invoice OR receipt"
@@ -88,6 +98,10 @@ zmail read <id> [--raw]         ← read a message (or: zmail message <id>)
 zmail thread <id> [--raw]       ← fetch full thread JSON
 zmail mcp                       ← start MCP server (stdio)
 ```
+
+**Sync modes:**
+- **`zmail sync`** (backward): Initial setup and backfill. Resumes from oldest synced date, fills gaps going backward. Uses date-based search with UID filtering to skip already-synced messages.
+- **`zmail update`** (forward): Frequent updates. Uses UID range search (`UID ${last_uid + 1}:*`) to fetch only new messages. Much faster than date-based search for incremental updates.
 
 **Rationale:** Agents like Claude Code and OpenClaw can invoke shell commands directly. A subprocess call to `zmail search` is faster than an MCP HTTP round-trip, requires no running server, and has no port management. The CLI returns structured JSON so agents can consume output directly.
 
@@ -278,6 +292,8 @@ Each window fetches, parses, and indexes completely before the next begins. IMAP
 
 **Default backfill:** 1 year. Set via CLI: `zmail sync --since 7d | 5w | 3m | 2y` (default: 1y). Override default via `DEFAULT_SYNC_SINCE` env var.
 
+**Resume behavior:** When running `zmail sync` with a longer date range than previously synced, it automatically resumes from the oldest synced date and continues backward. For example, if you've synced 7 days and run `zmail sync --since 14d`, it will only fetch messages from days 8-14, skipping the already-synced first 7 days entirely.
+
 **Crash recovery:** Each window is atomic — if sync crashes mid-window, it restarts from the beginning of the incomplete window. No partial state to reconcile.
 
 **Progress estimation:** `(today − earliest_synced_date) / (today − target_date) × 100`. Always accurate because the earliest fully-synced date is known precisely.
@@ -403,14 +419,23 @@ We do **not** introduce async job IDs or a job queue for sync unless we later ne
 
 ### ADR-020: Sync and Indexing — Concurrent, Single-Threaded, Resilient
 
-**Decision:** `zmail sync` is the single user-facing command. Under the hood, it launches sync and indexing concurrently via `Promise.all` in a single thread:
+**Decision:** `zmail sync` and `zmail update` are the user-facing sync commands. Both launch sync and indexing concurrently via `Promise.all` in a single thread:
 
 1. **Sync** (bandwidth-bound): IMAP fetch → write `.eml` to maildir → insert into SQLite with `embedding_state = 'pending'`. Optimized to saturate network bandwidth (ADR-016/017).
 2. **Indexing** (API-rate-bound): Claim pending messages from SQLite → generate embeddings via OpenAI → write to LanceDB → mark `embedding_state = 'done'`. Multiple embedding batches in-flight concurrently. Embedding API responses are cached on disk (by model and input hash) so the same string is not re-embedded. Cache lives under `DATA_DIR/embedding-cache` (or `EMBEDDING_CACHE_PATH`); set `EMBEDDING_CACHE=0` to disable.
 
 ```
-zmail sync
+zmail sync [--since <spec>]  (backward sync)
 ├── Sync:     IMAP → maildir + SQLite  (bandwidth-bound)
+│             - Resumes from oldest synced date
+│             - Uses UID filtering to skip already-synced messages
+│             - Searches before oldest synced date when all messages from a day are synced
+└── Indexing: SQLite → OpenAI → LanceDB  (API-rate-bound, async-pipelined)
+
+zmail update  (forward sync)
+├── Sync:     IMAP → maildir + SQLite  (bandwidth-bound)
+│             - Uses UID range search (UID ${last_uid + 1}:*)
+│             - Only fetches new messages since last sync
 └── Indexing: SQLite → OpenAI → LanceDB  (API-rate-bound, async-pipelined)
     ├── batch 1 in-flight (OpenAI API call)
     ├── batch 2 in-flight (OpenAI API call)
@@ -454,7 +479,7 @@ This replaces timestamp-based staleness detection. PID checks are instantaneous 
 - Agents and remote clients can poll status at any time without depending on stdout.
 - Stdout progress lines are emitted periodically for environments that stream output.
 
-**No standalone indexing command.** There is no `zmail index` or backfill tool. `zmail sync` is the only entry point for data ingestion and indexing — one command, one process.
+**No standalone indexing command.** There is no `zmail index` or backfill tool. `zmail sync` and `zmail update` are the only entry points for data ingestion and indexing — one command, one process.
 
 **Rationale:** Embedding via an external API (OpenAI) adds ~50–100ms latency per message. Running this inline during sync would make sync API-bound instead of bandwidth-bound, violating ADR-016. Async-pipelined indexing lets each subsystem optimize for its own bottleneck while keeping the execution model simple: one thread, one process, no IPC.
 
