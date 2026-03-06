@@ -1,8 +1,8 @@
 # OPP-007: Packaging and Distribution — npm, Homebrew, Ditching the Binary
 
-**Status: Implemented.** Runtime is Node.js 22+; distributed via GitHub Packages as `@cirne/zmail`; dev uses `tsx`. See AGENTS.md and ARCHITECTURE.md ADR-008.
+**Status: Implemented.** Runtime is Node.js 22+; distributed via public npm as `@cirne/zmail`; dev uses `tsx`. See AGENTS.md and ARCHITECTURE.md ADR-008.
 
-**Package name:** `@cirne/zmail` (scoped). The unscoped name `zmail` is already taken on npm (old package, ~3 weekly downloads). For alpha distribution, packages are published to GitHub Packages. Install via `npm i -g @cirne/zmail` after configuring npm for GitHub Packages (see GitHub Releases for installation instructions).
+**Package name:** `@cirne/zmail` (scoped). The unscoped name `zmail` is already taken on npm (old package, ~3 weekly downloads). Packages are published to public npm. Install via `npm i -g @cirne/zmail` (no authentication required).
 
 **Problem (historical):** The single-executable binary (Bun `--compile`) was attractive in concept but in practice Bun had bundling and runtime bugs. We see failures in the compiled binary: incompatible lib dependencies (e.g. [BUG-001](bugs/BUG-001-attachment-and-read-agent-friction.md) — pdf.js not resolvable inside the binary), and other native/bundling issues. We want a reliable install path that fits our target user (developers who use Claude) without depending on a fragile binary build.
 
@@ -89,7 +89,7 @@ GitHub Actions workflow (`.github/workflows/release.yml`) automatically builds a
 4. Generates version (from tag, timestamp, or manual)
 5. Updates `package.json` version
 6. Creates npm tarball (`npm pack`)
-7. Publishes to GitHub Packages as `@cirne/zmail` (with `latest` dist-tag for main pushes)
+7. Publishes to npm as `@cirne/zmail` (with `latest` dist-tag for main pushes)
 8. Creates GitHub Release with tarball attachment (only for tag-based and manual releases)
 
 **Creating a release:**
@@ -112,7 +112,7 @@ git tag v0.1.0-alpha.1
 git push origin v0.1.0-alpha.1
 ```
 
-The workflow will automatically build, publish to GitHub Packages, and create a GitHub Release.
+The workflow will automatically build, publish to npm, and create a GitHub Release.
 
 ---
 
@@ -126,12 +126,10 @@ curl -fsSL https://raw.githubusercontent.com/cirne/zmail/main/install.sh | bash
 
 The script:
 - Checks for Node.js 22+ requirement
-- Configures npm for GitHub Packages (`@cirne:registry`)
-- Guides user through GitHub PAT authentication
-- Installs `@cirne/zmail` globally
-- Verifies installation
+- Installs `@cirne/zmail` globally from npm (no authentication required)
+- Verifies installation and provides PATH guidance if needed
 
-This provides a one-command install experience while handling the GitHub Packages authentication flow.
+This provides a one-command install experience with helpful Node.js version checking and PATH troubleshooting.
 
 ---
 

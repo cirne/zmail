@@ -2,12 +2,10 @@
 set -euo pipefail
 
 # zmail installer
-# Installs @cirne/zmail from GitHub Packages
+# Installs @cirne/zmail from npm
 # Usage: curl -fsSL https://raw.githubusercontent.com/cirne/zmail/main/install.sh | bash
 
 ZMAIL_PACKAGE="@cirne/zmail"
-GITHUB_REGISTRY="https://npm.pkg.github.com"
-GITHUB_SCOPE="@cirne"
 
 # Colors for output
 RED='\033[0;31m'
@@ -58,73 +56,40 @@ check_npm() {
     success "npm detected"
 }
 
-# Configure npm for GitHub Packages
-configure_npm() {
-    info "Configuring npm for GitHub Packages..."
-    
-    # Set registry for @cirne scope
-    npm config set "${GITHUB_SCOPE}:registry" "${GITHUB_REGISTRY}" || \
-        error "Failed to configure npm registry"
-    
-    success "npm configured for GitHub Packages"
-}
-
-# Check if user is authenticated
-check_auth() {
-    # Check if there's an auth token configured
-    if npm config get "${GITHUB_SCOPE}:registry" | grep -q "${GITHUB_REGISTRY}"; then
-        # Try to access the package (this will fail if not authenticated)
-        if npm view "${ZMAIL_PACKAGE}" --registry="${GITHUB_REGISTRY}" &> /dev/null; then
-            success "Already authenticated with GitHub Packages"
-            return 0
-        fi
-    fi
-    
-    return 1
-}
-
-# Authenticate with GitHub Packages
-authenticate() {
-    warn "Authentication required for GitHub Packages"
-    echo ""
-    echo "You need a GitHub Personal Access Token (PAT) with 'read:packages' permission."
-    echo ""
-    echo "1. Create a token at: https://github.com/settings/tokens/new"
-    echo "   - Select 'read:packages' scope"
-    echo "   - Copy the token"
-    echo ""
-    echo "2. Run this command to authenticate:"
-    echo ""
-    echo "   npm login --scope=${GITHUB_SCOPE} --registry=${GITHUB_REGISTRY}"
-    echo ""
-    echo "   When prompted:"
-    echo "   - Username: your GitHub username"
-    echo "   - Password: paste your Personal Access Token"
-    echo "   - Email: your GitHub email (optional)"
-    echo ""
-    
-    read -p "Have you created a GitHub PAT? (y/n) " -n 1 -r
-    echo ""
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        error "Please create a GitHub PAT and run the installer again"
-    fi
-    
-    echo ""
-    info "Running npm login..."
-    npm login --scope="${GITHUB_SCOPE}" --registry="${GITHUB_REGISTRY}" || \
-        error "Authentication failed. Please check your credentials."
-    
-    success "Authenticated with GitHub Packages"
-}
-
 # Install zmail
 install_zmail() {
     info "Installing ${ZMAIL_PACKAGE}..."
     
-    npm install -g "${ZMAIL_PACKAGE}" --registry="${GITHUB_REGISTRY}" || \
+    npm install -g "${ZMAIL_PACKAGE}" || \
         error "Installation failed"
     
     success "Installed ${ZMAIL_PACKAGE}"
+}
+
+# Get npm global bin directory
+get_npm_bin_dir() {
+    npm config get prefix | xargs -I {} echo "{}/bin"
+}
+
+# Check if directory is on PATH
+is_on_path() {
+    local dir="$1"
+    echo "$PATH" | tr ':' '\n' | grep -Fxq "$dir"
+}
+
+# Detect shell profile file
+detect_shell_profile() {
+    if [ -n "${ZSH_VERSION:-}" ]; then
+        echo "$HOME/.zshrc"
+    elif [ -n "${BASH_VERSION:-}" ]; then
+        if [ -f "$HOME/.bash_profile" ]; then
+            echo "$HOME/.bash_profile"
+        else
+            echo "$HOME/.bashrc"
+        fi
+    else
+        echo "$HOME/.profile"
+    fi
 }
 
 # Verify installation
@@ -137,8 +102,37 @@ verify_installation() {
         echo "Run 'zmail --help' for usage information."
     else
         warn "zmail command not found in PATH"
-        echo "You may need to add npm's global bin directory to your PATH:"
-        echo "  export PATH=\"\$(npm config get prefix)/bin:\$PATH\""
+        echo ""
+        
+        NPM_BIN_DIR=$(get_npm_bin_dir)
+        info "npm installed zmail to: $NPM_BIN_DIR"
+        
+        if [ -f "$NPM_BIN_DIR/zmail" ]; then
+            success "Binary exists at $NPM_BIN_DIR/zmail"
+        else
+            error "Binary not found at expected location: $NPM_BIN_DIR/zmail"
+        fi
+        
+        echo ""
+        if is_on_path "$NPM_BIN_DIR"; then
+            warn "$NPM_BIN_DIR is on PATH, but zmail command not found"
+            echo "This may be a shell caching issue. Try:"
+            echo "  hash -r  # bash"
+            echo "  rehash   # zsh"
+        else
+            warn "$NPM_BIN_DIR is not on your PATH"
+            echo ""
+            echo "Add this to your shell profile to make zmail available:"
+            echo ""
+            SHELL_PROFILE=$(detect_shell_profile)
+            echo "  echo 'export PATH=\"$NPM_BIN_DIR:\$PATH\"' >> $SHELL_PROFILE"
+            echo ""
+            echo "Then reload your shell:"
+            echo "  source $SHELL_PROFILE"
+            echo ""
+            echo "Or run this command now (temporary for current session):"
+            echo "  export PATH=\"$NPM_BIN_DIR:\$PATH\""
+        fi
     fi
 }
 
@@ -152,12 +146,6 @@ main() {
     
     check_node
     check_npm
-    configure_npm
-    
-    if ! check_auth; then
-        authenticate
-    fi
-    
     install_zmail
     verify_installation
     
