@@ -1,19 +1,19 @@
-name: Release npm Package
+name: Build and Test
 
 on:
   push:
     branches:
-      - main  # Auto-release "latest" on main push
-    tags:
-      - 'v*'  # Triggers on tags like v0.1.0, v0.1.0-alpha.1, etc.
+      - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:  # Allows manual triggering
 
 jobs:
-  build-and-release:
+  build-and-test:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      packages: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -21,7 +21,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
         run: npm ci
@@ -34,84 +33,3 @@ jobs:
       - name: Build TypeScript
         run: npm run build
 
-      - name: Generate version
-        id: version
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            # Tag-based: extract version from tag (removes 'v' prefix)
-            VERSION=${GITHUB_REF#refs/tags/v}
-            TAG=${{ github.ref_name }}
-            DIST_TAG=""
-          elif [[ "${{ github.ref }}" == refs/heads/main ]]; then
-            # Main branch push: generate timestamp-based version, publish as "latest"
-            BASE_VERSION=$(node -p "require('./package.json').version")
-            TIMESTAMP=$(date -u +"%Y%m%d.%H%M%S")
-            VERSION="${BASE_VERSION}-alpha.${TIMESTAMP}"
-            TAG=""
-            DIST_TAG="latest"
-          else
-            # Manual dispatch: generate timestamp-based alpha version
-            BASE_VERSION=$(node -p "require('./package.json').version")
-            TIMESTAMP=$(date -u +"%Y%m%d.%H%M%S")
-            VERSION="${BASE_VERSION}-alpha.${TIMESTAMP}"
-            TAG="v${VERSION}"
-            DIST_TAG=""
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "dist_tag=$DIST_TAG" >> $GITHUB_OUTPUT
-          echo "Generated version: $VERSION (dist-tag: ${DIST_TAG:-none})"
-
-      - name: Update version in package.json
-        run: npm pkg set version=${{ steps.version.outputs.version }}
-
-      - name: Create npm package tarball
-        run: npm pack
-
-      - name: Publish to npm
-        run: |
-          if [[ -n "${{ steps.version.outputs.dist_tag }}" ]]; then
-            npm publish --tag=${{ steps.version.outputs.dist_tag }}
-          else
-            npm publish
-          fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Create GitHub Release
-        if: steps.version.outputs.tag != ''
-        uses: softprops/action-gh-release@v1
-        with:
-          files: '*.tgz'
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: Release ${{ steps.version.outputs.tag }}
-          body: |
-            ## Installation
-
-            ### Quick install (recommended)
-
-            ```bash
-            curl -fsSL https://raw.githubusercontent.com/cirne/zmail/main/install.sh | bash
-            ```
-
-            The install script handles:
-            - Node.js 22+ requirement check
-            - Global installation of `@cirne/zmail` from npm
-            - PATH verification and guidance
-
-            ### Manual installation (alternative)
-
-            If you prefer to install manually:
-
-            ```bash
-            npm install -g @cirne/zmail
-            ```
-
-            ### From tarball (alternative)
-
-            Download the `.tgz` file and install:
-            ```bash
-            npm install -g @cirne-zmail-${{ steps.version.outputs.version }}.tgz
-            ```
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
