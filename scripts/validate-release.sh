@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Quick validation script for release workflow and install script
+# Run this before pushing to validate everything is ready
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+errors=0
+
+check() {
+    local description="$1"
+    shift
+    if "$@" >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} $description"
+    else
+        echo -e "${RED}✗${NC} $description"
+        ((errors++))
+    fi
+}
+
+section() {
+    echo ""
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE}  $1${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+}
+
+section "Release Validation Checklist"
+
+# Install script checks
+section "Install Script"
+check "install.sh syntax valid" bash -n "$REPO_ROOT/install.sh"
+check "install.sh is executable" [ -x "$REPO_ROOT/install.sh" ]
+check "install.sh has correct URL" grep -q "curl.*raw.githubusercontent.com.*install.sh" "$REPO_ROOT/install.sh"
+
+# Package.json checks
+section "Package Configuration"
+check "package.json exists" [ -f "$REPO_ROOT/package.json" ]
+check "package name is @cirne/zmail" grep -q '"name": "@cirne/zmail"' "$REPO_ROOT/package.json"
+check "bin field configured" grep -q '"bin".*"zmail"' "$REPO_ROOT/package.json"
+check "Node.js 22+ required" grep -q '"engines".*"node".*">=22"' "$REPO_ROOT/package.json"
+
+# Workflow checks
+section "GitHub Actions Workflow"
+check "release.yml exists" [ -f "$REPO_ROOT/.github/workflows/release.yml" ]
+check "workflow has triggers" grep -q "on:" "$REPO_ROOT/.github/workflows/release.yml"
+check "main branch trigger configured" bash -c "grep -A 2 'branches:' '$REPO_ROOT/.github/workflows/release.yml' | grep -q 'main'"
+check "tag trigger configured" bash -c "grep -A 1 'tags:' '$REPO_ROOT/.github/workflows/release.yml' | grep -q 'v'"
+check "tests run in workflow" grep -q "npm test" "$REPO_ROOT/.github/workflows/release.yml"
+check "build step configured" grep -q "npm run build" "$REPO_ROOT/.github/workflows/release.yml"
+check "package name in workflow" grep -q "@cirne/zmail" "$REPO_ROOT/.github/workflows/release.yml"
+
+# Documentation checks
+section "Documentation"
+check "AGENTS.md exists" [ -f "$REPO_ROOT/AGENTS.md" ]
+check "install.sh in AGENTS.md" grep -q "install.sh" "$REPO_ROOT/AGENTS.md" || echo -e "${YELLOW}⚠${NC} install.sh not mentioned in AGENTS.md"
+check "OPP-007 doc exists" [ -f "$REPO_ROOT/docs/opportunities/OPP-007-packaging-npm-homebrew.md" ]
+
+# Git checks
+section "Git Status"
+if [ -d "$REPO_ROOT/.git" ]; then
+    cd "$REPO_ROOT"
+    if git diff --quiet install.sh .github/workflows/release.yml package.json 2>/dev/null; then
+        echo -e "${GREEN}✓${NC} No uncommitted changes to release files"
+    else
+        echo -e "${YELLOW}⚠${NC} Uncommitted changes detected (this is OK for testing)"
+    fi
+else
+    echo -e "${YELLOW}⚠${NC} Not a git repository"
+fi
+
+# Summary
+section "Summary"
+if [ $errors -eq 0 ]; then
+    echo -e "${GREEN}All checks passed!${NC}"
+    echo ""
+    echo "Ready to push. Next steps:"
+    echo "1. git push origin main"
+    echo "2. Monitor GitHub Actions: https://github.com/cirne/zmail/actions"
+    echo "3. Check package: https://github.com/cirne/zmail/packages"
+    echo "4. Test install: curl -fsSL https://raw.githubusercontent.com/cirne/zmail/main/install.sh | bash"
+    exit 0
+else
+    echo -e "${RED}$errors check(s) failed${NC}"
+    exit 1
+fi
