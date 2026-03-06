@@ -53,9 +53,9 @@ The typical agent workflow today:
 With Exa in zmail, this collapses to one call:
 
 ```
-zmail search "competitor pricing changes" --mode=enriched
+zmail search "competitor pricing changes" --enriched
 
-  → FTS5 + semantic search over local email
+  → Hybrid search (semantic + FTS5) over local email
   → Extract entities/topics from top results (company names, product names)
   → Parallel Exa search for those entities + the original query
   → RRF merge: email results + web results, ranked together
@@ -138,10 +138,9 @@ The enrich worker follows the same pattern: concurrent but independent, runs dur
 
 | Mode | What it does |
 |---|---|
-| `fts` | Existing FTS5 (default, unchanged) |
-| `semantic` | Existing vector search |
-| `hybrid` | Existing RRF merge |
-| `enriched` | Hybrid + Exa web search fused via RRF, entity-aware query expansion |
+| Default (hybrid) | Semantic + FTS5 search (existing RRF merge) |
+| `--fts` | FTS5-only search (exact keyword matching) |
+| `--enriched` | Hybrid + Exa web search fused via RRF, entity-aware query expansion (future) |
 
 ### New storage
 

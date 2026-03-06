@@ -87,7 +87,7 @@ This layout applies to **both Phase 1 and Phase 2 (open source)**. Each user run
 ```
 zmail sync [--since <spec>]     ← Initial sync: fill gaps going backward (e.g. --since 7d, 5w, 3m, 2y)
 zmail refresh                    ← Refresh: fetch new messages since last sync (frequent updates)
-zmail search <query> [flags]    ← header-first search with mode/detail controls
+zmail search <query> [flags]    ← hybrid search (semantic + FTS) by default; use --fts for FTS-only
                                   Query supports inline operators: from:, to:, subject:, after:, before:
                                   Example: zmail search "from:alice@example.com invoice OR receipt"
 zmail who <query> [flags]        ← find people by address or display name (sent/received/mentioned counts)
@@ -153,7 +153,7 @@ FTS5 virtual tables on `body_text` and `subject` live in the same `.db` file.
 
 ### ADR-008: Language & Runtime — TypeScript + Node.js
 
-**Decision:** TypeScript on Node.js 22+. Dev: `tsx` runs source directly; distribution: `tsc` + `tsc-alias` → `dist/`, install via `curl -fsSL https://raw.githubusercontent.com/cirne/zmail/main/install.sh | bash` (see [OPP-007](opportunities/OPP-007-packaging-npm-homebrew.md)).
+**Decision:** TypeScript on Node.js 22+. Dev: `tsx` runs source directly; distribution: `tsc` + `tsc-alias` → `dist/`, install via `npm install -g @cirne/zmail` (see [OPP-007](opportunities/OPP-007-packaging-npm-homebrew.md)).
 
 **Rationale:**
 - Node.js is ubiquitous; no separate runtime (Bun) required. Aligns with OpenClaw/Claude Code (`npm i -g`).
@@ -459,7 +459,7 @@ This replaces timestamp-based staleness detection. PID checks are instantaneous 
 
 **Progressive availability:** Synced messages are immediately available for FTS5/keyword search and direct fetch. Semantic search becomes available progressively as the indexer catches up — like a database serving queries while building an index in the background.
 
-**Mode-aware search.** Search supports `auto|fts|semantic|hybrid`. `auto` selects a fast lexical path for clear metadata/keyword intent and uses hybrid for broader semantic intent. Hybrid still uses FTS5 + semantic search with Reciprocal Rank Fusion (RRF). Messages that have not been embedded remain discoverable through FTS.
+**Hybrid search by default.** Search uses hybrid (semantic + FTS5) by default, combining results with Reciprocal Rank Fusion (RRF). Use `--fts` flag for FTS-only (exact keyword matching). Messages that have not been embedded remain discoverable through FTS.
 
 **Observability:**
 - Both subsystems track progress in the DB (`sync_summary`, `indexing_status`).

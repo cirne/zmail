@@ -15,6 +15,7 @@ curl -fsSL https://raw.githubusercontent.com/cirne/zmail/main/install.sh | bash
 ## Key documents
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — technical decisions and rationale (**read before making storage, sync, or interface decisions**)
+- [`docs/MCP.md`](docs/MCP.md) — MCP server interface documentation (**read for agent integration**)
 - [`docs/VISION.md`](docs/VISION.md) — product vision
 - [`docs/OPPORTUNITIES.md`](docs/OPPORTUNITIES.md) — product improvement ideas
 
@@ -43,6 +44,18 @@ src/
 - **No migrations.** Schema is applied on DB creation. For schema changes: run manual `ALTER TABLE` / SQL against the live DB to save a resync. Full reset (`rm -rf ~/.zmail/data/` + resync) also works. Do not create or maintain migration files.
 - When testing search, **use the standard search interface** (`search(db, { query })` from `~/search`). Do not query the DB directly unless debugging or explicitly asked.
 
+## Processing ztest feedback
+
+The sibling project `../ztest` hosts Claude Code config for manual testing. When agents discover issues, they write feedback files to `../ztest/feedback/`. Process this feedback using the **process-feedback** skill:
+
+1. **Read feedback files** from `../ztest/feedback/*.md`
+2. **Check for duplicates** — search existing bugs (`docs/bugs/`) and opportunities (`docs/opportunities/`)
+3. **Check if fixed** — if feedback matches archived/fixed items, delete the feedback file
+4. **Convert to bugs/opportunities** — create new bug (`docs/bugs/BUG-XXX-*.md`) or opportunity (`docs/opportunities/OPP-XXX-*.md`) files
+5. **Update indexes** — add entries to `docs/BUGS.md` or `docs/OPPORTUNITIES.md`
+
+See `.cursor/skills/process-feedback/SKILL.md` for the complete workflow. The `docs/bugs/` and `docs/opportunities/` directories serve as our issue tracker (Jira replacement).
+
 ## Commands
 
 ```bash
@@ -56,6 +69,23 @@ npm run install-cli  # install wrapper to ~/.local/bin so `zmail` runs source fr
 npm run lint         # tsc --noEmit (no ESLint)
 npm test             # vitest run
 ```
+
+### Sync logging and background execution
+
+**Recommended:** Run sync in the background for long-running syncs. Each sync run writes a log file to `{ZMAIL_HOME}/logs/sync-{date}-{time}.log`:
+
+```bash
+# Run sync in background
+zmail sync --since 1y &
+
+# Check sync status
+zmail status
+
+# Inspect the latest log (stdout shows log path)
+tail -f ~/.zmail/logs/sync-*.log
+```
+
+The CLI prints the log file path to stdout (e.g., `Sync log: ~/.zmail/logs/sync-20250306-143022.log`) so agents can tail/inspect it. Verbose logging goes to the file, not stdout, making background execution clean.
 
 **Using `zmail` from the repo:** `npm run zmail -- <command> [args]` (the `--` is required so args reach the CLI). Or: `npx tsx src/index.ts -- <command> [args]`.
 
@@ -72,6 +102,28 @@ zmail attachment read <attachment_id> --raw  # output raw binary (pipe to file)
 Supported formats: PDF, DOCX, XLSX, HTML, CSV, TXT. Extraction happens on first read and is cached in the DB.
 
 **CLI help and onboarding (no env required):** `zmail --help`, `zmail -h`, `zmail help` show usage; `zmail setup` runs interactive setup. If any command fails due to missing config, the CLI prints "No config found. Run 'zmail setup' first."
+
+## Agent interfaces: CLI vs MCP
+
+zmail provides two interfaces for agents, both accessing the same SQLite index:
+
+**CLI (command-line):**
+- Use for direct subprocess calls from agents
+- Fast for one-off queries (no persistent connection overhead)
+- Returns structured JSON with `--json` flag
+- Best for: one-time searches, status checks, simple workflows
+
+**MCP (Model Context Protocol):**
+- Use for persistent tool-based integration
+- Run `zmail mcp` to start stdio server
+- Better for iterative workflows with multiple tool calls
+- Best for: agents with MCP support, complex multi-step queries, tool-based integrations
+
+See [`docs/MCP.md`](docs/MCP.md) for MCP server documentation and tool reference.
+
+## Search
+
+Search uses hybrid (semantic + FTS) by default for comprehensive results. Use `--fts` for exact keyword matching only.
 
 ## Configuration
 

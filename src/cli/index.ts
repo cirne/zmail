@@ -1,5 +1,5 @@
 import { runSync } from "~/sync";
-import { searchWithMeta, type SearchMode } from "~/search";
+import { searchWithMeta } from "~/search";
 import { who } from "~/search/who";
 import { indexMessages } from "~/search/indexing";
 import { getDb } from "~/db";
@@ -33,7 +33,6 @@ type SearchField =
   | "snippet"
   | "body";
 
-const VALID_MODES = new Set<SearchMode>(["auto", "fts", "semantic", "hybrid"]);
 const VALID_DETAILS = new Set<SearchDetail>(["headers", "snippet", "body"]);
 const VALID_FIELDS = new Set<SearchField>([
   "messageId",
@@ -72,7 +71,7 @@ interface ParsedSearchArgs {
   afterDate?: string;
   beforeDate?: string;
   limit?: number;
-  mode: SearchMode;
+  fts: boolean;
   detail: SearchDetail;
   fields?: SearchField[];
   forceJson: boolean;
@@ -89,7 +88,8 @@ function searchUsage() {
   console.error("");
   console.error("Flags:");
   console.error("  --limit <n>        max results (default: 20)");
-  console.error("  --mode <mode>      auto | fts | semantic | hybrid (default: auto)");
+  console.error("  --fts              use FTS-only search (exact keyword matching)");
+  console.error("                     default: hybrid search (semantic + FTS)");
   console.error("  --detail <level>   headers | snippet | body (default: headers)");
   console.error("  --fields <csv>     projection fields, e.g. messageId,subject,date");
   console.error("  --ids-only         return only message IDs");
@@ -198,7 +198,7 @@ function parseDateFlag(raw: string, flagName: "--after" | "--before"): string {
 function parseSearchArgs(rawArgs: string[]): ParsedSearchArgs {
   const parsed: ParsedSearchArgs = {
     query: "",
-    mode: "auto",
+    fts: false,
     detail: "headers",
     forceJson: false,
     idsOnly: false,
@@ -255,13 +255,12 @@ function parseSearchArgs(rawArgs: string[]): ParsedSearchArgs {
       parsed.limit = limit;
       continue;
     }
-    if (arg === "--mode") {
-      const mode = readValue(arg) as SearchMode;
-      if (!VALID_MODES.has(mode)) {
-        throw new Error(`Invalid --mode: "${mode}". Use auto, fts, semantic, or hybrid.`);
-      }
-      parsed.mode = mode;
+    if (arg === "--fts") {
+      parsed.fts = true;
       continue;
+    }
+    if (arg === "--mode") {
+      throw new Error(`--mode flag has been removed. Use --fts for FTS-only search, or omit for hybrid (default).`);
     }
     if (arg === "--detail") {
       const detail = readValue(arg) as SearchDetail;
@@ -353,21 +352,75 @@ function projectResult(
   return projected;
 }
 
+function getSearchHint(
+  query: string,
+  resultCount: number,
+  totalMatched: number,
+  limit?: number,
+  meta?: { hasFtsMatches: boolean; hasSemanticOnlyMatches: boolean; hasAnyMatches: boolean }
+): string | undefined {
+  const words = query.trim().split(/\s+/).filter(Boolean);
+  const isSingleWord = words.length === 1;
+  const isVagueWord = isSingleWord && ["important", "urgent", "meeting", "email", "message", "document", "file"].includes(words[0].toLowerCase());
+
+  // No results hint
+  if (resultCount === 0) {
+    return "No results found. Try broader terms or check spelling.";
+  }
+
+  // Truncated results hint (only show if we have more results than displayed)
+  if (totalMatched > resultCount && totalMatched > (limit ?? 20)) {
+    return `Showing ${resultCount} of ${totalMatched} matches. Use --limit to see more.`;
+  }
+
+  // Vague single-word query hint (common words that return too many results)
+  if (isVagueWord) {
+    return "Tip: Vague query — try adding more context (e.g., 'important from:alice' or 'urgent subject:budget')";
+  }
+
+  // Single-word query that's not a common vague word
+  if (isSingleWord && words[0].length > 2 && !isVagueWord) {
+    return "Tip: Narrow results with from:name or subject:keyword";
+  }
+
+  // Query has exact keyword feel (short, no spaces, or contains quotes)
+  const hasQuotes = /["']/.test(query);
+  const isShortExact = words.length <= 2 && words.every(w => w.length <= 10);
+  if (hasQuotes || isShortExact) {
+    return "Tip: Add --fts for exact keyword matching";
+  }
+
+  // Use meta to detect semantic-only matches (no FTS matches) for gibberish queries
+  if (meta && meta.hasSemanticOnlyMatches && !meta.hasFtsMatches && resultCount > 0) {
+    // This suggests low-quality semantic matches (gibberish query)
+    return "No exact matches found. Showing semantic approximations.";
+  }
+
+  return undefined;
+}
+
 function serializeJsonPayload(
   rows: Array<Record<string, unknown> | string>,
-  timings?: object
+  timings?: object,
+  query?: string,
+  resultCount?: number,
+  limit?: number,
+  meta?: { hasFtsMatches: boolean; hasSemanticOnlyMatches: boolean; hasAnyMatches: boolean }
 ): string {
   const total = rows.length;
+  const hint = query ? getSearchHint(query, resultCount ?? total, total, limit, meta) : undefined;
+  
   for (let includeCount = total; includeCount >= 0; includeCount--) {
     const visible = rows.slice(0, includeCount);
     const truncated = includeCount < total;
     const payload =
-      truncated || timings
+      truncated || timings || hint
         ? {
             results: visible,
             truncated,
             totalMatched: total,
             returned: visible.length,
+            ...(hint ? { hint } : {}),
             ...(timings ? { timings } : {}),
           }
         : visible;
@@ -383,6 +436,7 @@ function serializeJsonPayload(
       truncated: true,
       totalMatched: total,
       returned: 0,
+      ...(hint ? { hint } : {}),
       ...(timings ? { timings } : {}),
     },
     null,
@@ -582,10 +636,15 @@ async function main() {
       const syncDone = new Promise<void>((resolve) => { resolveSyncDone = resolve; });
 
       // Sync always goes backward (fills gaps from most recent backward)
-      const syncOptions: { since?: string; direction: 'backward' } = {
+      const syncOptions: { since?: string; direction: 'backward'; onLogPath?: (logPath: string) => void } = {
         direction: 'backward',
       };
       if (since) syncOptions.since = since;
+      
+      // Print log path immediately when sync starts (useful for background execution)
+      syncOptions.onLogPath = (logPath: string) => {
+        console.log(`Sync log: ${logPath}`);
+      };
 
       const syncPromise = runSync(syncOptions).then((result) => {
         resolveSyncDone();
@@ -596,6 +655,7 @@ async function main() {
       // Wait for both to complete
       const [syncResult, indexResult] = await Promise.all([syncPromise, indexPromise]);
 
+      // Log path already printed at start via onLogPath callback
       if (syncResult) {
         const sec = (syncResult.durationMs / 1000).toFixed(2);
         const mb = (syncResult.bytesDownloaded / (1024 * 1024)).toFixed(2);
@@ -652,7 +712,7 @@ async function main() {
         afterDate: parsed.afterDate,
         beforeDate: parsed.beforeDate,
         limit: effectiveLimit,
-        mode: parsed.mode,
+        fts: parsed.fts,
       });
 
       let results: Array<SearchResult & { body?: string }> = run.results;
@@ -664,13 +724,24 @@ async function main() {
         const rows = parsed.idsOnly
           ? results.map((r) => r.messageId)
           : results.map((r) => projectResult(r, effectiveDetail, parsed.fields));
-        const json = serializeJsonPayload(rows, parsed.timings ? run.timings : undefined);
+        const json = serializeJsonPayload(
+          rows,
+          parsed.timings ? run.timings : undefined,
+          parsed.query,
+          results.length,
+          effectiveLimit,
+          run._meta
+        );
         console.log(json);
         break;
       }
 
       if (results.length === 0) {
         console.log("No results found.");
+        const hint = getSearchHint(parsed.query, 0, 0, effectiveLimit, run._meta);
+        if (hint) {
+          console.log(`\n${hint}`);
+        }
         break;
       }
 
@@ -698,6 +769,12 @@ async function main() {
           const snippetShort = snippetClean.length > 30 ? snippetClean.slice(0, 27) + "..." : snippetClean;
           console.log(`  ${date}  ${fromShort}  ${subjectShort}  ${snippetShort}`);
         }
+      }
+      
+      // Show actionable hints after results (only in TTY, not JSON)
+      const hint = getSearchHint(parsed.query, results.length, results.length, effectiveLimit, run._meta);
+      if (hint) {
+        console.log(`\n${hint}`);
       }
       break;
     }
@@ -800,8 +877,13 @@ async function main() {
       const syncDone = new Promise<void>((resolve) => { resolveSyncDone = resolve; });
 
       // Refresh always goes forward (fetches new messages since last sync)
-      const syncOptions: { direction: 'forward' } = {
+      const syncOptions: { direction: 'forward'; onLogPath?: (logPath: string) => void } = {
         direction: 'forward',
+      };
+      
+      // Print log path immediately when sync starts (useful for background execution)
+      syncOptions.onLogPath = (logPath: string) => {
+        console.log(`Sync log: ${logPath}`);
       };
 
       const syncPromise = runSync(syncOptions).then((result) => {
@@ -813,6 +895,7 @@ async function main() {
       // Wait for both to complete
       const [syncResult, indexResult] = await Promise.all([syncPromise, indexPromise]);
 
+      // Log path already printed at start via onLogPath callback
       if (syncResult) {
         const sec = (syncResult.durationMs / 1000).toFixed(2);
         const mb = (syncResult.bytesDownloaded / (1024 * 1024)).toFixed(2);
@@ -1100,7 +1183,7 @@ async function main() {
 Usage:
   zmail sync [--since <spec>]     Initial sync: fill gaps going backward (e.g. --since 7d, 5w, 3m, 2y)
   zmail refresh                    Refresh: fetch new messages since last sync (frequent updates)
-  zmail search <query> [flags]     Search email (see --help for flags)
+  zmail search <query> [flags]     Search email (hybrid by default; use --fts for exact keyword matching)
   zmail who <query> [flags]        Find people by address or name (see --help for flags)
   zmail status                     Show sync and indexing status
   zmail stats                      Show database statistics
@@ -1109,6 +1192,10 @@ Usage:
   zmail attachment list <message_id>   List attachments (use message_id from search)
   zmail attachment read <message_id> <index>|<filename>   Read by index (1-based) or filename
   zmail mcp                        Start MCP server (stdio)
+
+Agent interfaces:
+  CLI (this): Use for direct subprocess calls. Fast for one-off queries, returns JSON with --json flag.
+  MCP: Use for persistent tool-based integration. Run 'zmail mcp' to start stdio server. See docs/MCP.md.
 
 Run 'zmail setup' for setup instructions.
 `);

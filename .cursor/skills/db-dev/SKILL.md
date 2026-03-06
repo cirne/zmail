@@ -32,7 +32,7 @@ rm -rf ~/.zmail/data/
 rm -f ~/.zmail/data/zmail.db ~/.zmail/data/zmail.db-shm ~/.zmail/data/zmail.db-wal
 ```
 
-After either, the next run that uses the DB (e.g. `bun run sync` or `zmail search`) will create a new DB and apply the current schema. First sync after a full reset is full; later syncs are incremental.
+After either, the next run that uses the DB (e.g. `npm run sync` or `zmail search`) will create a new DB and apply the current schema. First sync after a full reset is full; later syncs are incremental.
 
 ## When to reset
 

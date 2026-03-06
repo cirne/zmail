@@ -1,7 +1,10 @@
-FROM oven/bun:1-debian
+FROM node:20-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     ca-certificates \
     curl \
+    python3 \
+    make \
+    g++ \
     && rm -rf /var/lib/apt/lists/*
