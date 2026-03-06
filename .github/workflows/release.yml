@@ -1,35 +1,115 @@
-name: Build & Upload
+name: Release npm Package
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main  # Auto-release "latest" on main push
+    tags:
+      - 'v*'  # Triggers on tags like v0.1.0, v0.1.0-alpha.1, etc.
+  workflow_dispatch:  # Allows manual triggering
 
 jobs:
-  build:
+  build-and-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@cirne'
 
-      - run: bun install
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Build darwin-arm64
-        run: bun build src/index.ts --compile --target=bun-darwin-arm64 --outfile dist/zmail-darwin-arm64
+      - name: Run tests
+        run: npm test
 
-      - name: Build linux-x64
-        run: bun build src/index.ts --compile --target=bun-linux-x64 --outfile dist/zmail-linux-x64
+      - name: Build TypeScript
+        run: npm run build
 
-      - name: Upload to DigitalOcean Spaces
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
-          AWS_DEFAULT_REGION: us-east-1
-          RELEASE_SECRET_PATH: ${{ secrets.RELEASE_SECRET_PATH }}
+      - name: Generate version
+        id: version
         run: |
-          ENDPOINT="https://sfo3.digitaloceanspaces.com"
-          BUCKET="zmail-builds"
-          aws s3 cp dist/zmail-darwin-arm64 "s3://$BUCKET/$RELEASE_SECRET_PATH/darwin-arm64/zmail" \
-            --endpoint-url "$ENDPOINT" --acl public-read
-          aws s3 cp dist/zmail-linux-x64 "s3://$BUCKET/$RELEASE_SECRET_PATH/linux-x64/zmail" \
-            --endpoint-url "$ENDPOINT" --acl public-read
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            # Tag-based: extract version from tag (removes 'v' prefix)
+            VERSION=${GITHUB_REF#refs/tags/v}
+            TAG=${{ github.ref_name }}
+            DIST_TAG=""
+          elif [[ "${{ github.ref }}" == refs/heads/main ]]; then
+            # Main branch push: generate timestamp-based version, publish as "latest"
+            BASE_VERSION=$(node -p "require('./package.json').version")
+            TIMESTAMP=$(date -u +"%Y%m%d.%H%M%S")
+            VERSION="${BASE_VERSION}-alpha.${TIMESTAMP}"
+            TAG=""
+            DIST_TAG="latest"
+          else
+            # Manual dispatch: generate timestamp-based alpha version
+            BASE_VERSION=$(node -p "require('./package.json').version")
+            TIMESTAMP=$(date -u +"%Y%m%d.%H%M%S")
+            VERSION="${BASE_VERSION}-alpha.${TIMESTAMP}"
+            TAG="v${VERSION}"
+            DIST_TAG=""
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "dist_tag=$DIST_TAG" >> $GITHUB_OUTPUT
+          echo "Generated version: $VERSION (dist-tag: ${DIST_TAG:-none})"
+
+      - name: Update version in package.json
+        run: npm pkg set version=${{ steps.version.outputs.version }}
+
+      - name: Create npm package tarball
+        run: npm pack
+
+      - name: Publish to GitHub Packages
+        run: |
+          if [[ -n "${{ steps.version.outputs.dist_tag }}" ]]; then
+            npm publish --registry=https://npm.pkg.github.com --tag=${{ steps.version.outputs.dist_tag }}
+          else
+            npm publish --registry=https://npm.pkg.github.com
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.tag != ''
+        uses: softprops/action-gh-release@v1
+        with:
+          files: '*.tgz'
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.tag }}
+          body: |
+            ## Installation
+
+            ### From GitHub Packages (recommended)
+
+            1. Create a GitHub Personal Access Token with `read:packages` permission
+            2. Configure npm:
+               ```bash
+               npm config set @cirne:registry https://npm.pkg.github.com
+               ```
+            3. Authenticate:
+               ```bash
+               npm login --scope=@cirne --registry=https://npm.pkg.github.com
+               # Username: your-github-username
+               # Password: your-personal-access-token
+               ```
+            4. Install:
+               ```bash
+               npm install -g @cirne/zmail
+               ```
+
+            ### From tarball (alternative)
+
+            Download the `.tgz` file and install:
+            ```bash
+            npm install -g @cirne-zmail-${{ steps.version.outputs.version }}.tgz
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

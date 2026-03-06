@@ -1,5 +1,5 @@
 {
-  "name": "zmail",
+  "name": "@cirne/zmail",
   "version": "0.1.0",
   "description": "Agent-first email system — sync, index, and search email for AI agents",
   "scripts": {

@@ -1,8 +1,8 @@
 # OPP-007: Packaging and Distribution — npm, Homebrew, Ditching the Binary
 
-**Status: Implemented.** Runtime is Node.js 22+; install via `npm i -g @cirne/zmail` (or TBD scoped name); dev uses `tsx`. See AGENTS.md and ARCHITECTURE.md ADR-008.
+**Status: Implemented.** Runtime is Node.js 22+; distributed via GitHub Packages as `@cirne/zmail`; dev uses `tsx`. See AGENTS.md and ARCHITECTURE.md ADR-008.
 
-**Package name:** The unscoped name `zmail` is already taken on npm (old package, ~3 weekly downloads). Actual package name TBD; short term likely **`@cirne/zmail`** (scoped), so install would be `npm i -g @cirne/zmail`.
+**Package name:** `@cirne/zmail` (scoped). The unscoped name `zmail` is already taken on npm (old package, ~3 weekly downloads). For alpha distribution, packages are published to GitHub Packages. Install via `npm i -g @cirne/zmail` after configuring npm for GitHub Packages (see GitHub Releases for installation instructions).
 
 **Problem (historical):** The single-executable binary (Bun `--compile`) was attractive in concept but in practice Bun had bundling and runtime bugs. We see failures in the compiled binary: incompatible lib dependencies (e.g. [BUG-001](bugs/BUG-001-attachment-and-read-agent-friction.md) — pdf.js not resolvable inside the binary), and other native/bundling issues. We want a reliable install path that fits our target user (developers who use Claude) without depending on a fragile binary build.
 
@@ -41,7 +41,7 @@
 
 ---
 
-## Recommendation
+## Recommendation (implemented)
 
 - **Ditch the binary** as the primary distribution artifact.
 - **Distribute via npm** so that `npm i -g @cirne/zmail` (or TBD scoped name; unscoped `zmail` is taken on npm) is the canonical install. This matches OpenClaw and Claude Code and fits the target user.
@@ -49,7 +49,7 @@
 
 ---
 
-## Node port (if we move off Bun)
+## Node port (completed)
 
 Replacements are localized and well-understood:
 
@@ -67,7 +67,56 @@ Replacements are localized and well-understood:
 
 ---
 
-## Version expectations (for docs)
+## Release workflow
+
+GitHub Actions workflow (`.github/workflows/release.yml`) automatically builds and publishes releases:
+
+**Triggers:**
+- **Main branch push:** Automatically releases "latest" package after tests pass (timestamp version, published with `latest` dist-tag)
+- **Tag push:** When a version tag matching `v*` is pushed (e.g., `v0.1.0`, `v0.1.0-alpha.1`)
+- **Manual dispatch:** Can be triggered manually from GitHub Actions UI
+
+**Version handling:**
+- **Main branch push:** Automatically generates timestamp-based alpha version and publishes with `latest` dist-tag. Format: `{base-version}-alpha.YYYYMMDD.HHMMSS` (e.g., `0.1.0-alpha.20240306.143022`). Users installing `@cirne/zmail` get the latest main branch build. Tests must pass before release.
+- **Tag-based releases:** Version is extracted from the git tag (removes `v` prefix). Example: tag `v0.1.0-alpha.1` → package version `0.1.0-alpha.1`. Useful for manually specified versions when closer to release.
+- **Manual dispatch (alpha):** Automatically generates timestamp-based alpha version. Format: `{base-version}-alpha.YYYYMMDD.HHMMSS` (e.g., `0.1.0-alpha.20240306.143022`). This ensures unique versions for each alpha build without manual version management.
+- **Timestamp format:** Uses UTC timestamp (`YYYYMMDD.HHMMSS`) for chronological sorting and uniqueness
+
+**Process:**
+1. Installs dependencies (`npm ci`)
+2. Runs tests (`npm test`) - must pass for main branch pushes
+3. Builds TypeScript (`npm run build`)
+4. Generates version (from tag, timestamp, or manual)
+5. Updates `package.json` version
+6. Creates npm tarball (`npm pack`)
+7. Publishes to GitHub Packages as `@cirne/zmail` (with `latest` dist-tag for main pushes)
+8. Creates GitHub Release with tarball attachment (only for tag-based and manual releases)
+
+**Creating a release:**
+
+**Automatic releases (main branch):**
+- Every push to `main` automatically triggers a release after tests pass
+- Version: `0.1.0-alpha.YYYYMMDD.HHMMSS` (timestamp-based)
+- Published with `latest` dist-tag, so `npm install -g @cirne/zmail` gets the latest main build
+- No GitHub Release created (just package published)
+
+**Manual alpha releases:**
+- Trigger the workflow manually from GitHub Actions UI (workflow_dispatch)
+- Version will be automatically generated with timestamp: `0.1.0-alpha.YYYYMMDD.HHMMSS`
+- Creates GitHub Release with tarball
+
+**Tagged releases (when closer to release):**
+```bash
+# Tag a specific version
+git tag v0.1.0-alpha.1
+git push origin v0.1.0-alpha.1
+```
+
+The workflow will automatically build, publish to GitHub Packages, and create a GitHub Release.
+
+---
+
+## Version expectations (current)
 
 - **If we stay on Bun (npm package, run with Bun):** “Requires Bun 1.x. Install with `npm i -g @cirne/zmail` (Node 18+ for npm) or `bun install -g @cirne/zmail`.”
 - **If we port to Node:** “Requires Node 18+ (LTS). Install with `npm i -g @cirne/zmail` (or TBD package name).” No Bun required.
