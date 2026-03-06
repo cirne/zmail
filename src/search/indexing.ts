@@ -129,7 +129,16 @@ async function processBatch(
 
     return { indexed: batch.length, failed: 0 };
   } catch (err) {
-    logger.error("Embedding batch failed", { error: String(err) });
+    // Log detailed error information
+    const errorDetails = {
+      error: err instanceof Error ? err.message : String(err),
+      errorType: err instanceof Error ? err.constructor.name : typeof err,
+      stack: err instanceof Error ? err.stack : undefined,
+      batchSize: batch.length,
+      messageIds: batch.slice(0, 5).map((m) => m.message_id), // Log first 5 message IDs
+      embeddingsAdded,
+    };
+    logger.error("Embedding batch failed", errorDetails);
     
     // Only mark as failed if embeddings weren't successfully added to LanceDB.
     // If embeddings were added but UPDATE failed, try to update state anyway.
@@ -219,7 +228,6 @@ export async function indexMessages(options?: {
     `UPDATE indexing_status SET
       total_to_index = (SELECT COUNT(*) FROM messages WHERE embedding_state = 'pending'),
       indexed_so_far = 0,
-      failed = 0,
       started_at = datetime('now'),
       completed_at = NULL
     WHERE id = 1`
@@ -265,11 +273,16 @@ export async function indexMessages(options?: {
 
         // Update progress
         db.run(
-          `UPDATE indexing_status SET indexed_so_far = ?, failed = ? WHERE id = 1`,
-          [totalIndexed, totalFailed]
+          `UPDATE indexing_status SET indexed_so_far = ? WHERE id = 1`,
+          [totalIndexed]
         );
 
         inFlight.delete(batchPromise);
+      }).catch((err) => {
+        // If the promise handler itself throws, log it but don't crash
+        logger.error("Batch promise handler error", { error: String(err) });
+        inFlight.delete(batchPromise);
+        throw err; // Re-throw to ensure Promise.all/race properly handles it
       });
 
       inFlight.add(batchPromise);
@@ -277,7 +290,16 @@ export async function indexMessages(options?: {
 
     if (inFlight.size > 0) {
       // Wait for at least one batch to complete before claiming more
-      await Promise.race(inFlight);
+      // If done=true was just set, wait for ALL batches to ensure proper completion
+      if (done) {
+        // Queue is empty and sync is done - wait for all remaining batches to finish
+        await Promise.all(inFlight);
+        // All batches completed, exit the loop
+        break;
+      } else {
+        // Normal case: wait for one batch to complete, then continue
+        await Promise.race(inFlight);
+      }
     } else if (!done) {
       // No in-flight work and sync still running — poll
       emptyPolls++;
@@ -293,9 +315,11 @@ export async function indexMessages(options?: {
     }
   }
 
-  // Wait for remaining in-flight batches
+  // Final safety check: ensure all batches completed (should be empty if done=true path was taken)
   if (inFlight.size > 0) {
+    logger.warn("Unexpected batches still in flight after loop exit", { count: inFlight.size });
     await Promise.all(inFlight);
+    logger.info("All batches completed");
   }
 
   if (totalIndexed > 0) {
@@ -309,10 +333,9 @@ export async function indexMessages(options?: {
   db.run(
     `UPDATE indexing_status SET
       indexed_so_far = ?,
-      failed = ?,
       completed_at = datetime('now')
     WHERE id = 1`,
-    [totalIndexed, totalFailed],
+    [totalIndexed],
   );
 
   releaseLock(db, "indexing_status");

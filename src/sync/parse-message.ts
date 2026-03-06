@@ -1,4 +1,5 @@
 import PostalMime from "postal-mime";
+import { htmlToMarkdown } from "~/lib/content-normalize";
 
 export interface ParsedAttachment {
   filename: string;
@@ -65,6 +66,13 @@ export async function parseRawMessage(raw: Buffer): Promise<ParsedMessage> {
     });
   }
 
+  // Extract body text: prefer plain text, fall back to converting HTML to markdown
+  let bodyText = email.text ?? "";
+  if (!bodyText && email.html) {
+    // For HTML-only emails, convert HTML to markdown for storage
+    bodyText = htmlToMarkdown(email.html);
+  }
+
   return {
     messageId,
     fromAddress: email.from?.address ?? "",
@@ -73,7 +81,7 @@ export async function parseRawMessage(raw: Buffer): Promise<ParsedMessage> {
     ccAddresses: (email.cc ?? []).map((a) => a.address).filter((a): a is string => Boolean(a)),
     subject: email.subject ?? "",
     date,
-    bodyText: email.text ?? "",
+    bodyText,
     bodyHtml: email.html ?? null,
     attachments,
   };

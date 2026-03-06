@@ -238,6 +238,94 @@ describe("indexMessages — exit condition scenarios", () => {
     const pending = db.query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'pending'").get() as { c: number };
     expect(pending.c).toBe(0);
   });
+
+  it("waits for all in-flight batches to complete DB updates when queue empties", async () => {
+    const db = createTestDb();
+    // Create enough messages to have multiple batches in flight
+    // With concurrency=2 and BATCH_SIZE=100, we need >100 messages to have batches in flight
+    const messageIds: string[] = [];
+    for (let i = 0; i < 150; i++) {
+      messageIds.push(insertTestMessage(db, { subject: `Message ${i}` }));
+    }
+
+    let resolveSyncDone!: () => void;
+    const syncDone = new Promise<void>((resolve) => { resolveSyncDone = resolve; });
+
+    // Track which batches have been processed
+    let batchCount = 0;
+    const processedBatches = new Set<number>();
+
+    // Create a fake batch processor that simulates a slow batch (to ensure multiple in flight)
+    const slowFakeBatch = async (db: Database, batch: MessageRow[]): Promise<{ indexed: number; failed: number }> => {
+      const currentBatch = batchCount++;
+      processedBatches.add(currentBatch);
+      
+      // Simulate processing delay to ensure multiple batches are in flight
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      
+      // Mark messages as done
+      const ids = batch.map((m) => m.id);
+      const placeholders = ids.map(() => "?").join(",");
+      db.run(`UPDATE messages SET embedding_state = 'done' WHERE id IN (${placeholders})`, ids);
+      
+      return Promise.resolve({ indexed: batch.length, failed: 0 });
+    };
+
+    // Resolve sync immediately so queue empties while batches are still processing
+    resolveSyncDone();
+
+    const result = await indexMessages({ db, syncDone, _processBatch: slowFakeBatch });
+
+    // Verify all messages were processed
+    expect(result.indexed).toBe(150);
+    const pending = db.query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'pending'").get() as { c: number };
+    const claimed = db.query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'claimed'").get() as { c: number };
+    expect(pending.c).toBe(0);
+    expect(claimed.c).toBe(0); // No messages should be left in 'claimed' state
+  });
+
+  it("properly marks failed batches in DB even when queue empties during processing", async () => {
+    const db = createTestDb();
+    // Create exactly BATCH_SIZE messages (100) to test the exact scenario
+    const messageIds: string[] = [];
+    for (let i = 0; i < 100; i++) {
+      messageIds.push(insertTestMessage(db, { subject: `Message ${i}` }));
+    }
+
+    let resolveSyncDone!: () => void;
+    const syncDone = new Promise<void>((resolve) => { resolveSyncDone = resolve; });
+
+    // Create a fake batch processor that fails
+    const failingBatch = async (db: Database, batch: MessageRow[]): Promise<{ indexed: number; failed: number }> => {
+      // Simulate processing delay
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      
+      // Mark messages as failed (simulating embedding API failure)
+      const ids = batch.map((m) => m.id);
+      const placeholders = ids.map(() => "?").join(",");
+      db.run(`UPDATE messages SET embedding_state = 'failed' WHERE id IN (${placeholders})`, ids);
+      
+      return Promise.resolve({ indexed: 0, failed: batch.length });
+    };
+
+    // Resolve sync immediately so queue empties while batch is processing
+    resolveSyncDone();
+
+    const result = await indexMessages({ db, syncDone, _processBatch: failingBatch });
+
+    // Verify failed count matches
+    expect(result.failed).toBe(100);
+    expect(result.indexed).toBe(0);
+    
+    // Verify all messages are properly marked as failed in DB
+    const failed = db.query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'failed'").get() as { c: number };
+    const claimed = db.query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'claimed'").get() as { c: number };
+    const pending = db.query("SELECT COUNT(*) as c FROM messages WHERE embedding_state = 'pending'").get() as { c: number };
+    
+    expect(failed.c).toBe(100); // All 100 messages should be marked as failed
+    expect(claimed.c).toBe(0); // No messages should be left in 'claimed' state
+    expect(pending.c).toBe(0); // No messages should be left in 'pending' state
+  });
 });
 
 describe("isSyncRunning", () => {

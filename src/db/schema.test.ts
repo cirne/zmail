@@ -62,7 +62,7 @@ describe("database schema", () => {
       expect(names).toContain("is_running");
       expect(names).toContain("total_to_index");
       expect(names).toContain("indexed_so_far");
-      expect(names).toContain("failed");
+      expect(names).not.toContain("failed"); // Removed - messages table is source of truth
       expect(names).toContain("started_at");
       expect(names).toContain("completed_at");
       expect(names).toContain("owner_pid");

@@ -72,16 +72,39 @@ export async function embedBatch(texts: string[]): Promise<number[][]> {
   }
   const client = getOpenAIClient();
   const missTexts = missIndices.map((i) => truncated[i]);
-  const response = await client.embeddings.create({
-    model: MODEL_ID,
-    input: missTexts,
-  });
+  let response;
+  try {
+    response = await client.embeddings.create({
+      model: MODEL_ID,
+      input: missTexts,
+    });
+  } catch (err) {
+    // Re-throw with more context about the API call
+    const error = err instanceof Error ? err : new Error(String(err));
+    (error as any).apiCall = "embeddings.create";
+    (error as any).inputCount = missTexts.length;
+    (error as any).model = MODEL_ID;
+    throw error;
+  }
   const missEmbeddings = response.data.map((d) => d.embedding);
-  await Promise.all(
-    missIndices.map((idx, j) =>
-      setCachedEmbedding(cacheDir, MODEL_ID, truncated[idx], missEmbeddings[j])
-    )
-  );
+  
+  // Cache writes can fail (e.g., disk full, permissions) but shouldn't fail the batch
+  // Log errors but continue - embeddings are still valid
+  const cachePromises = missIndices.map(async (idx, j) => {
+    try {
+      await setCachedEmbedding(cacheDir, MODEL_ID, truncated[idx], missEmbeddings[j]);
+    } catch (cacheErr) {
+      // Log cache write failures but don't fail the batch
+      const { logger } = await import("~/lib/logger");
+      logger.warn("Failed to cache embedding", {
+        error: cacheErr instanceof Error ? cacheErr.message : String(cacheErr),
+        inputLength: truncated[idx].length,
+        cacheDir,
+      });
+    }
+  });
+  await Promise.all(cachePromises);
+  
   for (let j = 0; j < missIndices.length; j++) {
     results[missIndices[j]] = missEmbeddings[j];
   }

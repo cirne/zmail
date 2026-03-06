@@ -13,8 +13,7 @@ Usage:
   zmail                      Start background sync
   zmail setup                Interactive setup (creates ~/.zmail/config.json and .env)
   zmail sync [--since <spec>]     Initial sync: fill gaps going backward (e.g. --since 7d, 5w, 3m, 2y)
-  zmail update                     Update: fetch new messages since last sync (frequent updates)
-  zmail refresh                    Alias for 'update'
+  zmail refresh                    Refresh: fetch new messages since last sync (frequent updates)
   zmail search <query> [flags]    Search email (use --help for flags)
   zmail who <query> [flags]       Find people by address or name (use --help for flags)
   zmail status                    Show sync and indexing status

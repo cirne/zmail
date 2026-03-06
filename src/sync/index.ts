@@ -165,7 +165,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
       let uids: number[];
       
       if (state && state.uidvalidity === uidvalidity && state.last_uid > 0 && direction === 'forward') {
-        // Forward sync (update/refresh): use UID range search for new messages
+        // Forward sync (refresh): use UID range search for new messages
         // UID range 'N:*' means "UIDs >= N", so we use last_uid + 1 to get UIDs > last_uid
         searchQuery = { uid: `${state.last_uid + 1}:*` };
         const searchResult = await client.search(searchQuery, { uid: true });

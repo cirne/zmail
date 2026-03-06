@@ -145,8 +145,48 @@ export function createMcpServer() {
     }
   );
 
+  server.tool(
+    "get_message",
+    "Get a single message by message ID. Returns message content in LLM-friendly format.",
+    {
+      messageId: z.string().describe("Message ID to retrieve"),
+      raw: z.boolean().optional().describe("Return raw EML format instead of parsed content"),
+    },
+    async ({ messageId, raw = false }) => {
+      const db = getDb();
+      const { formatMessageForOutput } = await import("~/cli");
+      const { formatMessageLlmFriendly } = await import("~/cli/format-message");
+      
+      const message = db
+        .query("SELECT * FROM messages WHERE message_id = ?")
+        .get(messageId) as any | undefined;
+      
+      if (!message) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ error: `Message ${messageId} not found` }, null, 2),
+            },
+          ],
+        };
+      }
+      
+      const shaped = await formatMessageForOutput(message, raw);
+      const formatted = formatMessageLlmFriendly(message, shaped);
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: formatted,
+          },
+        ],
+      };
+    }
+  );
+
   // TODO: get_thread(thread_id)
-  // TODO: get_message(message_id)
 
   return server;
 }

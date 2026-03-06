@@ -437,7 +437,7 @@ function readRawEmail(rawPath: string): Buffer | null {
   }
 }
 
-async function formatMessageForOutput(message: MessageRow, raw: boolean): Promise<Record<string, unknown>> {
+export async function formatMessageForOutput(message: MessageRow, raw: boolean): Promise<Record<string, unknown>> {
   const db = getDb();
   const attachments = db
     .query(
@@ -492,18 +492,35 @@ async function formatMessageForOutput(message: MessageRow, raw: boolean): Promis
           body = (parsed.bodyText ?? "").trim();
           if (body) source = "text";
         }
-      } catch {
+      } catch (err) {
+        // Log parsing errors for debugging
+        const { logger } = await import("~/lib/logger");
+        logger.warn("Failed to parse raw email for message", {
+          messageId: message.message_id,
+          rawPath: message.raw_path,
+          error: err instanceof Error ? err.message : String(err),
+        });
         // fall through to empty content
       }
+    } else {
+      // Log when raw email file can't be read
+      const { logger } = await import("~/lib/logger");
+      logger.warn("Could not read raw email file", {
+        messageId: message.message_id,
+        rawPath: message.raw_path,
+      });
     }
   }
 
+  // Ensure body is never null/undefined - use empty string if parsing failed
+  const finalBody = body || "";
+  
   return {
     ...rest,
     content: {
       format: source === "html" ? "markdown" : "text",
       source,
-      markdown: body,
+      markdown: finalBody,
     },
     attachments: attachments.map((a) => ({
       id: a.id,
@@ -519,7 +536,7 @@ async function formatMessageForOutput(message: MessageRow, raw: boolean): Promis
 function getUnknownCommandHint(unknownCommand: string): string {
   // Handle common typos/variations
   if (unknownCommand === "refresh" || unknownCommand === "update") {
-    return "Did you mean 'zmail update' or 'zmail refresh'?";
+    return "Did you mean 'zmail refresh'?";
   }
   const c = unknownCommand.toLowerCase();
   if (c === "show" || c === "get" || c === "open" || c === "view") {
@@ -543,7 +560,7 @@ async function main() {
         console.error("  --since  relative range: 7d, 5w, 3m, 2y (days, weeks, months, years)");
         console.error("");
         console.error("Syncs email going backward from most recent, filling gaps in the specified date range.");
-        console.error("Typically used for initial setup. For frequent updates, use 'zmail update'.");
+        console.error("Typically used for initial setup. For frequent updates, use 'zmail refresh'.");
         process.exit(1);
       }
 
@@ -760,17 +777,16 @@ async function main() {
       break;
     }
 
-    case "update":
     case "refresh": {
-      // Update/Refresh: Frequent updates, brings local copy up to date
-      // Usage: zmail update (or zmail refresh)
+      // Refresh: Frequent updates, brings local copy up to date
+      // Usage: zmail refresh
       // No --since needed - uses last_uid checkpoint to fetch only new messages
 
       // Run sync (bandwidth-bound) and indexing (API-rate-bound) concurrently (ADR-020).
       let resolveSyncDone!: () => void;
       const syncDone = new Promise<void>((resolve) => { resolveSyncDone = resolve; });
 
-      // Update always goes forward (fetches new messages since last sync)
+      // Refresh always goes forward (fetches new messages since last sync)
       const syncOptions: { direction: 'forward' } = {
         direction: 'forward',
       };
@@ -789,7 +805,7 @@ async function main() {
         const mb = (syncResult.bytesDownloaded / (1024 * 1024)).toFixed(2);
         const kbps = (syncResult.bandwidthBytesPerSec / 1024).toFixed(1);
         console.log("");
-        console.log("Update metrics:");
+        console.log("Refresh metrics:");
         console.log(`  messages:  ${syncResult.synced} new, ${syncResult.messagesFetched} fetched`);
         console.log(`  downloaded: ${mb} MB (${syncResult.bytesDownloaded} bytes)`);
         console.log(`  bandwidth: ${kbps} KB/s`);
@@ -824,7 +840,6 @@ async function main() {
         is_running: number;
         total_to_index: number;
         indexed_so_far: number;
-        failed: number;
         started_at: string | null;
         completed_at: string | null;
       };
@@ -838,7 +853,7 @@ async function main() {
         console.log(`Sync:      never run`);
       }
 
-      // Indexing status - show actual count from messages table, not just last run
+      // Indexing status - always use messages table as source of truth
       const totalIndexed = db.query("SELECT COUNT(*) as count FROM messages WHERE embedding_state = 'done'").get() as { count: number };
       const totalFailed = db.query("SELECT COUNT(*) as count FROM messages WHERE embedding_state = 'failed'").get() as { count: number };
       
@@ -846,7 +861,8 @@ async function main() {
         const elapsed = indexStatus.started_at
           ? Math.round((Date.now() - new Date(indexStatus.started_at).getTime()) / 1000)
           : 0;
-        console.log(`Indexing:  running (${indexStatus.indexed_so_far}/${indexStatus.total_to_index} indexed, ${elapsed}s elapsed)`);
+        // During active indexing, show progress from indexing_status and failures from messages table
+        console.log(`Indexing:  running (${indexStatus.indexed_so_far}/${indexStatus.total_to_index} indexed${totalFailed.count > 0 ? `, ${totalFailed.count} failed` : ''}, ${elapsed}s elapsed)`);
       } else if (indexStatus.completed_at) {
         console.log(`Indexing:  idle (last: ${indexStatus.completed_at.slice(0, 10)}, ${totalIndexed.count} indexed${totalFailed.count > 0 ? `, ${totalFailed.count} failed` : ''})`);
       } else {
@@ -1039,8 +1055,7 @@ async function main() {
 
 Usage:
   zmail sync [--since <spec>]     Initial sync: fill gaps going backward (e.g. --since 7d, 5w, 3m, 2y)
-  zmail update                     Update: fetch new messages since last sync (frequent updates)
-  zmail refresh                    Alias for 'update'
+  zmail refresh                    Refresh: fetch new messages since last sync (frequent updates)
   zmail search <query> [flags]     Search email (see --help for flags)
   zmail who <query> [flags]        Find people by address or name (see --help for flags)
   zmail status                     Show sync and indexing status

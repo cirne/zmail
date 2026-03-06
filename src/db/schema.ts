@@ -80,7 +80,6 @@ export const SCHEMA = /* sql */ `
     is_running        INTEGER NOT NULL DEFAULT 0,
     total_to_index    INTEGER NOT NULL DEFAULT 0,
     indexed_so_far    INTEGER NOT NULL DEFAULT 0,
-    failed            INTEGER NOT NULL DEFAULT 0,
     started_at        TEXT,
     completed_at      TEXT,
     owner_pid         INTEGER

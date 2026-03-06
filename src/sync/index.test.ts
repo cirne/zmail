@@ -10,7 +10,7 @@ describe("runSync logic", () => {
     db = createTestDb();
   });
 
-  describe("forward sync (update)", () => {
+  describe("forward sync (refresh)", () => {
     it("should use UID range search format", () => {
       // Test the UID range format used in forward sync
       const lastUid = 100;

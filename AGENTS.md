@@ -39,7 +39,7 @@ src/
 bun install
 bun run dev          # starts background sync
 bun run sync         # initial sync (or: bun run src/index.ts sync --since 7d)
-bun run update       # update: fetch new messages (or: bun run src/index.ts update)
+bun run refresh      # refresh: fetch new messages (or: bun run src/index.ts refresh)
 bun run build        # compile native binary
 bun run install-cli  # build + copy binary to ~/.local/bin (or ZMAIL_INSTALL_DIR) for testing from another dir
 bun run lint         # tsc --noEmit (no ESLint)

@@ -28,9 +28,9 @@ Modern email systems are human-first — designed around inbox browsing and manu
    bun run src/index.ts sync --since 7d
    ```
    
-   **Update (fetch new messages):**
+   **Refresh (fetch new messages):**
    ```bash
-   bun run src/index.ts update
+   bun run src/index.ts refresh
    ```
 
 4. **Search (header-first default)**
@@ -42,8 +42,7 @@ Modern email systems are human-first — designed around inbox browsing and manu
 
 ```bash
 zmail sync [--since <spec>]     # Initial sync: fill gaps going backward
-zmail update                     # Update: fetch new messages since last sync
-zmail refresh                   # Alias for 'update'
+zmail refresh                    # Refresh: fetch new messages since last sync
 zmail search <query> [--mode auto|fts|semantic|hybrid]
                   [--detail headers|snippet|body]
                   [--fields <csv>] [--ids-only] [--timings]
