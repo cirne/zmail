@@ -23,7 +23,7 @@ let openaiClient: OpenAI | null = null;
 function getOpenAIClient(): OpenAI {
   if (!openaiClient) {
     if (!config.openai.apiKey) {
-      throw new Error("OPENAI_API_KEY is required for embeddings. Set it in .env");
+      throw new Error("ZMAIL_OPENAI_API_KEY is required for embeddings. Set it in ~/.zmail/.env");
     }
     openaiClient = new OpenAI({ apiKey: config.openai.apiKey });
   }

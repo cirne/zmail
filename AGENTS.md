@@ -1,6 +1,6 @@
 # zmail — Agent Guide
 
-**zmail** is an agent-first email system. It syncs email from IMAP providers, indexes it locally, and exposes it as a queryable dataset via a CLI and MCP server. Runs on **Node.js 20+**; dev uses `tsx`, distributed via npm as `@cirne/zmail` (see [OPP-007](docs/opportunities/OPP-007-packaging-npm-homebrew.md)).
+**zmail** is an agent-first email system. It syncs email from IMAP providers, indexes it locally, and exposes it as a queryable dataset via a CLI and MCP server. Runs on **Node.js 20+**; dev uses `tsx`, distributed via npm as `@cirne/zmail` (see [OPP-007](docs/opportunities/archive/OPP-007-packaging-npm-homebrew.md)). Read-only today; send is in the vision ([VISION.md](docs/VISION.md)) and unblocked by agent-friendly setup ([OPP-009](docs/opportunities/archive/OPP-009-agent-friendly-setup.md)).
 
 **Quick install:**
 ```bash
@@ -101,7 +101,14 @@ zmail attachment read <attachment_id> --raw  # output raw binary (pipe to file)
 
 Supported formats: PDF, DOCX, XLSX, HTML, CSV, TXT. Extraction happens on first read and is cached in the DB.
 
-**CLI help and onboarding (no env required):** `zmail --help`, `zmail -h`, `zmail help` show usage; `zmail setup` runs interactive setup. If any command fails due to missing config, the CLI prints "No config found. Run 'zmail setup' first."
+**CLI help and onboarding (no env required):** `zmail --help`, `zmail -h`, `zmail help` show usage. If any command fails due to missing config, the CLI prints "No config found. Run 'zmail setup' or 'zmail wizard' first."
+
+**Setup (CLI/agent-first):** Provide credentials via flags or env vars. For interactive prompts, use `zmail wizard`.
+```bash
+zmail setup --email user@gmail.com --password "app-password" --openai-key "sk-..." [--no-validate]
+# Or via environment variables:
+ZMAIL_EMAIL=... ZMAIL_IMAP_PASSWORD=... ZMAIL_OPENAI_API_KEY=... zmail setup
+```
 
 ## Agent interfaces: CLI vs MCP
 
@@ -132,12 +139,12 @@ zmail stores configuration in `~/.zmail/` (or `$ZMAIL_HOME` if set):
 - `~/.zmail/config.json` — non-secret settings (IMAP host/port/user, sync settings)
 - `~/.zmail/.env` — secrets (ZMAIL_IMAP_PASSWORD, ZMAIL_OPENAI_API_KEY)
 
-Run `zmail setup` to interactively create these files. The setup command:
+Run `zmail setup` (with flags/env) or `zmail wizard` (interactive) to create these files:
 
+- **`zmail setup`** — CLI/agent-first. Provide `--email`, `--password`, `--openai-key` or env vars. No prompts.
+- **`zmail wizard`** — Interactive. Prompts for email, IMAP password, OpenAI API key, and sync settings.
 - Creates `~/.zmail/` if it doesn't exist
-- Prompts for email, IMAP password, OpenAI API key, and sync settings
 - Validates credentials (IMAP connection test, OpenAI API test) unless `--no-validate` is used
-- On re-run, shows existing values as defaults
 
 Optional environment variables:
 

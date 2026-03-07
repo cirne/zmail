@@ -11,7 +11,8 @@ export const CLI_USAGE = `zmail — agent-first email
 
 Usage:
   zmail                      Start background sync
-  zmail setup                Interactive setup (creates ~/.zmail/config.json and .env)
+  zmail setup [--email <e>] [--password <p>] [--openai-key <k>] [--no-validate]   Setup via flags/env
+  zmail wizard [--no-validate]   Interactive setup (prompts for credentials)
   zmail sync [--since <spec>]     Initial sync: fill gaps going backward (e.g. --since 7d, 5w, 3m, 2y)
   zmail refresh                    Refresh: fetch new messages since last sync (frequent updates)
   zmail search <query> [flags]    Search email (hybrid by default; use --fts for exact keyword matching)

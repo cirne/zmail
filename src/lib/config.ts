@@ -56,33 +56,31 @@ function loadConfigJson(): ConfigJson {
 
 const configJson = loadConfigJson();
 
-function optional(key: string, fallback: string): string {
+function optionalZmail(key: string, fallback: string): string {
   return process.env[key] ?? fallback;
 }
 
-/** Get OpenAI API key with fallback: ZMAIL_OPENAI_API_KEY → OPENAI_API_KEY → error. */
+/** Get OpenAI API key. ZMAIL_OPENAI_API_KEY preferred; OPENAI_API_KEY as fallback (standard env var). */
 function getOpenAIKey(): string {
-  const zmailKey = process.env.ZMAIL_OPENAI_API_KEY;
-  if (zmailKey) return zmailKey;
-  const openaiKey = process.env.OPENAI_API_KEY;
-  if (openaiKey) return openaiKey;
+  const key = process.env.ZMAIL_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+  if (key) return key;
   throw new Error("Missing required environment variable: ZMAIL_OPENAI_API_KEY or OPENAI_API_KEY");
 }
 
 export const config = {
   imap: {
-    host: configJson.imap?.host || optional("IMAP_HOST", "imap.gmail.com"),
-    port: configJson.imap?.port || Number(optional("IMAP_PORT", "993")),
-    user: configJson.imap?.user || optional("IMAP_USER", ""),
-    password: optional("ZMAIL_IMAP_PASSWORD", ""),
+    host: configJson.imap?.host ?? "imap.gmail.com",
+    port: configJson.imap?.port ?? 993,
+    user: configJson.imap?.user ?? optionalZmail("ZMAIL_EMAIL", ""),
+    password: optionalZmail("ZMAIL_IMAP_PASSWORD", ""),
   },
   sync: {
     /** Default sync duration spec (e.g. 7d, 5w, 3m, 2y). Overridden by CLI --since. Default: 1y. */
-    defaultSince: configJson.sync?.defaultSince || optional("DEFAULT_SYNC_SINCE", "1y"),
+    defaultSince: configJson.sync?.defaultSince ?? "1y",
     /** Override mailbox to sync (e.g. "[Gmail]/All Mail" or "INBOX"). If unset, Gmail → All Mail, else INBOX. */
-    mailbox: configJson.sync?.mailbox || optional("SYNC_MAILBOX", ""),
+    mailbox: configJson.sync?.mailbox ?? "",
     /** Comma-separated labels to exclude (e.g. Trash,Spam). Case-insensitive. Default: Trash,Spam. */
-    excludeLabels: configJson.sync?.excludeLabels || (optional("SYNC_EXCLUDE_LABELS", "Trash,Spam").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)) as string[],
+    excludeLabels: configJson.sync?.excludeLabels ?? ["trash", "spam"],
   },
   get openai() {
     return { apiKey: getOpenAIKey() };
@@ -99,9 +97,8 @@ export const config = {
   get vectorsPath() {
     return join(this.dataDir, "vectors");
   },
-  /** Path for embedding response cache. Empty if EMBEDDING_CACHE=0. */
+  /** Path for embedding response cache. */
   get embeddingCachePath(): string {
-    if (process.env.EMBEDDING_CACHE === "0") return "";
     return join(this.dataDir, "embedding-cache");
   },
 } as const;

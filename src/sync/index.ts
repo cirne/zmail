@@ -16,7 +16,7 @@ function getSyncMailbox(host: string): string {
 }
 
 export interface SyncOptions {
-  /** Relative since spec (e.g. 7d, 5w, 3m, 2y). Overrides DEFAULT_SYNC_SINCE env var when set. */
+  /** Relative since spec (e.g. 7d, 5w, 3m, 2y). Overrides sync.defaultSince from config.json when set. */
   since?: string;
   /** Sync direction: 'forward' (newest first, for updates) or 'backward' (oldest first, for backfill). Default: 'forward' */
   direction?: 'forward' | 'backward';
@@ -130,7 +130,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
   const imap = requireImapConfig();
   if (!imap.user || !imap.password) {
     fileLogger.close();
-    throw new Error("IMAP_USER and IMAP_PASSWORD are required for sync. Set them in .env");
+    throw new Error("imap.user and imap.password are required for sync. Run 'zmail setup' or set in ~/.zmail/config.json and .env");
   }
 
   const sinceSpec = options?.since ?? config.sync.defaultSince;
@@ -164,7 +164,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
 
   const sinceDate = new Date(fromDate + "T00:00:00Z");
   if (isNaN(sinceDate.getTime())) {
-    throw new Error(`Invalid from date: ${fromDate}. Use --since 7d, 5w, 3m, 2y or set DEFAULT_SYNC_SINCE env var.`);
+    throw new Error(`Invalid from date: ${fromDate}. Use --since 7d, 5w, 3m, 2y or set sync.defaultSince in config.json.`);
   }
 
   // Parallelize connect with lock acquisition

@@ -213,7 +213,7 @@ export async function indexMessages(options?: {
   syncDone?: Promise<void>;
   /**
    * For testing: inject a DB instance instead of calling getDb().
-   * Also bypasses the OPENAI_API_KEY check when provided alongside _processBatch.
+   * Also bypasses the ZMAIL_OPENAI_API_KEY check when provided alongside _processBatch.
    */
   db?: SqliteDatabase;
   /**
@@ -222,8 +222,8 @@ export async function indexMessages(options?: {
    */
   _processBatch?: (db: SqliteDatabase, batch: MessageRow[]) => Promise<{ indexed: number; failed: number }>;
 }): Promise<IndexingResult> {
-  if (!config.openai.apiKey && !options?._processBatch) {
-    logger.warn("OPENAI_API_KEY not set, skipping indexing");
+  if (!options?._processBatch && !config.openai.apiKey) {
+    logger.warn("ZMAIL_OPENAI_API_KEY not set, skipping indexing");
     return { indexed: 0, skipped: 0, failed: 0, durationMs: 0, messagesPerMinute: 0 };
   }
 

@@ -53,12 +53,19 @@ describe("entrypoint onboarding", () => {
   });
 
   describe("setup (no env required)", () => {
-    it("setup command runs interactively (or exits if stdin not available)", async () => {
-      // Setup is now interactive, so in test environment it may fail or prompt
-      // We just verify it doesn't crash
-      const { exitCode } = await runEntrypoint(["setup", "--no-validate"]);
-      // Exit code may vary depending on whether stdin is available
-      expect([0, 1]).toContain(exitCode);
+    it("setup without credentials shows help and exits 1", async () => {
+      const env: Record<string, string | undefined> = {
+        ...process.env,
+        ZMAIL_HOME: "/tmp/zmail-entrypoint-test-" + Date.now(),
+      };
+      delete env.ZMAIL_EMAIL;
+      delete env.ZMAIL_IMAP_PASSWORD;
+      delete env.ZMAIL_OPENAI_API_KEY;
+      delete env.OPENAI_API_KEY;
+      const { stderr, exitCode } = await runEntrypoint(["setup", "--no-validate"], env as Record<string, string>);
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("zmail setup");
+      expect(stderr).toContain("zmail wizard");
     });
   });
 

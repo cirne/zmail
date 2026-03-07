@@ -17,7 +17,7 @@ IMAP provider → raw email store → SQLite FTS5 index → MCP server
 
 **Rationale:** If you can search your own email from an agent (Cursor, Claude Desktop) in natural language, the core value is proven. Everything else — filesystem interface, semantic embeddings, replacement SMTP mode — comes later.
 
-**Deferred:** Filesystem (FUSE) interface, SMTP ingress, semantic/vector search, multi-user.
+**Deferred:** Filesystem (FUSE) interface, SMTP ingress (MX hosting), semantic/vector search, multi-user. **Send (SMTP outbound)** is in the vision ([VISION.md](./VISION.md) — "The Full Loop"). Agent-friendly setup ([OPP-009](opportunities/archive/OPP-009-agent-friendly-setup.md)) is implemented; send is unblocked.
 
 ---
 
@@ -29,7 +29,7 @@ Container
     ├── maildir/           ← raw .eml files
     ├── zmail.db           ← SQLite: metadata, FTS5 index, sync state
     ├── vectors/           ← LanceDB embedded
-    └── embedding-cache/   ← OpenAI embedding responses by (model, input hash); optional, disable with EMBEDDING_CACHE=0
+    └── embedding-cache/   ← OpenAI embedding responses by (model, input hash)
 ```
 
 This layout applies to **both Phase 1 and Phase 2 (open source)**. Each user runs their own container with their own volume. There is no shared infrastructure to scale.
@@ -290,7 +290,7 @@ Window 5:  remaining to target date
 
 Each window fetches, parses, and indexes completely before the next begins. IMAP `UID SEARCH SINCE <date>` defines each window; UIDs are fetched highest-first within the window so most recent messages arrive first.
 
-**Default backfill:** 1 year. Set via CLI: `zmail sync --since 7d | 5w | 3m | 2y` (default: 1y). Override default via `DEFAULT_SYNC_SINCE` env var.
+**Default backfill:** 1 year. Set via CLI: `zmail sync --since 7d | 5w | 3m | 2y` (default: 1y). Override default via `sync.defaultSince` in config.json.
 
 **Resume behavior:** When running `zmail sync` with a longer date range than previously synced, it automatically resumes from the oldest synced date and continues backward. For example, if you've synced 7 days and run `zmail sync --since 14d`, it will only fetch messages from days 8-14, skipping the already-synced first 7 days entirely.
 
@@ -418,7 +418,7 @@ We do **not** introduce async job IDs or a job queue for sync unless we later ne
 **Decision:** `zmail sync` and `zmail refresh` are the user-facing sync commands. Both launch sync and indexing concurrently via `Promise.all` in a single thread:
 
 1. **Sync** (bandwidth-bound): IMAP fetch → write `.eml` to maildir → insert into SQLite with `embedding_state = 'pending'`. Optimized to saturate network bandwidth (ADR-016/017).
-2. **Indexing** (API-rate-bound): Claim pending messages from SQLite → generate embeddings via OpenAI → write to LanceDB → mark `embedding_state = 'done'`. Multiple embedding batches in-flight concurrently. Embedding API responses are cached on disk (by model and input hash) so the same string is not re-embedded. Cache lives under `ZMAIL_HOME/data/embedding-cache` (or `EMBEDDING_CACHE_PATH`); set `EMBEDDING_CACHE=0` to disable.
+2. **Indexing** (API-rate-bound): Claim pending messages from SQLite → generate embeddings via OpenAI → write to LanceDB → mark `embedding_state = 'done'`. Multiple embedding batches in-flight concurrently. Embedding API responses are cached on disk (by model and input hash) so the same string is not re-embedded. Cache lives under `ZMAIL_HOME/data/embedding-cache`.
 
 ```
 zmail sync [--since <spec>]  (backward sync)
