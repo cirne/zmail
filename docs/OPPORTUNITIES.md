@@ -21,6 +21,7 @@ See [VISION.md](./VISION.md) for product vision, [ARCHITECTURE.md](./ARCHITECTUR
 | [OPP-013](opportunities/OPP-013-who-name-inference-from-address.md) | Name Inference from Email Addresses | Infer display names from email addresses (e.g., `lewis.cirne@...` → "Lewis Cirne") as fallback when no header name exists. Enables identity merging for addresses without display names. |
 | [OPP-014](opportunities/OPP-014-who-external-enrichment-exploration.md) | External Enrichment for `zmail who` — Exploration | Tested Exa API for LinkedIn/Twitter/GitHub enrichment via `--enrich` flag. Exa's `category: "people"` returns wrong profiles (matches by last name, not exact name). Alternatives evaluated: Tavily (promising), OpenAI (not ideal), free options (unreliable). |
 | [OPP-015](opportunities/OPP-015-who-enhanced-signature-extraction.md) | Enhanced Signature Extraction for `zmail who` | Extract richer structured contact info from signatures: multiple phone numbers (mobile/office/fax), categorized URLs (LinkedIn/Twitter/GitHub), department/team, office location/timezone, pronouns, preferred name. Makes `who` a more complete address book. |
+| [OPP-016](opportunities/OPP-016-multi-inbox.md) | Multi-Inbox — One Install, Home + Work | Single install supports multiple mailboxes (e.g. home + work). One unified SQLite DB, single config.json (config only), root .env + per-mailbox .env; sync/refresh all by default with optional --mailbox to narrow; optional inbox: query operator. |
 
 ---
 
