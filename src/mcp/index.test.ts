@@ -91,7 +91,7 @@ describe("MCP Server Tools", () => {
       });
 
       const testDb = getDb();
-      const { formatMessageForOutput } = await import("~/cli");
+      const { formatMessageForOutput } = await import("~/messages/presenter");
       
       const normalizedThreadId = normalizeMessageId(threadId);
       const messages = testDb

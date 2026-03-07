@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { mkdirSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { ImapFlow } from "imapflow";
@@ -9,6 +9,7 @@ import { parseRawMessage } from "./parse-message";
 import { parseSinceToDate } from "./parse-since";
 import { createFileLogger, SYNC_LOG_PATH, setLogger, type FileLogger } from "~/lib/logger";
 import { withTimer } from "~/lib/timer";
+import { persistMessage, persistAttachmentsFromParsed } from "~/db/message-persistence";
 
 /** Mailbox to sync: All Mail for Gmail (per ADR-011), INBOX for others. */
 function getSyncMailbox(host: string): string {
@@ -42,26 +43,6 @@ function ensureMaildir() {
   mkdirSync(join(base, "new"), { recursive: true });
   mkdirSync(join(base, "tmp"), { recursive: true });
   mkdirSync(join(base, "attachments"), { recursive: true });
-}
-
-function sanitizeFilename(filename: string): string {
-  // Remove or replace unsafe characters for filesystem
-  return filename.replace(/[<>:"|?*\x00-\x1f]/g, "_").replace(/\.\./g, "_");
-}
-
-function ensureUniqueFilename(dir: string, baseFilename: string): string {
-  const sanitized = sanitizeFilename(baseFilename);
-  let candidate = sanitized;
-  let counter = 1;
-  
-  while (existsSync(join(dir, candidate))) {
-    const ext = candidate.includes(".") ? candidate.substring(candidate.lastIndexOf(".")) : "";
-    const nameWithoutExt = ext ? candidate.substring(0, candidate.lastIndexOf(".")) : candidate;
-    candidate = `${nameWithoutExt}_${counter}${ext}`;
-    counter++;
-  }
-  
-  return candidate;
 }
 
 function safeFilename(uid: number, messageId: string): string {
@@ -246,7 +227,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
       error: String(err),
       errorMessage: err instanceof Error ? err.message : String(err),
     });
-      releaseLock(db, "sync_summary");
+      releaseLock(db, "sync_summary", process.pid);
       fileLogger.close();
       restoreLogger();
       throw err; // Re-throw so outer catch handles it
@@ -325,7 +306,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
         if (direction === 'forward' && state && statusUidNextNum && statusUidValidityNum === state.uidvalidity) {
           if (statusUidNextNum - 1 <= state.last_uid) {
             db.exec("UPDATE sync_summary SET last_sync_at = datetime('now') WHERE id = 1");
-            releaseLock(db, "sync_summary");
+            releaseLock(db, "sync_summary", process.pid);
             const durationMs = Date.now() - startTime;
             phaseMs("runSync_exit_early");
             fileLogger.info("Early exit: no new messages", { elapsedMs: durationMs });
@@ -549,7 +530,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
 
       if (uids.length === 0) {
         db.exec("UPDATE sync_summary SET last_sync_at = datetime('now') WHERE id = 1");
-        releaseLock(db, "sync_summary");
+        releaseLock(db, "sync_summary", process.pid);
         const durationMs = Date.now() - startTime;
         phaseMs("runSync_exit");
         const result: SyncResult = {
@@ -660,51 +641,13 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
           fileLogger.debug("Slow disk write", { uid, writeMs, bytes: Buffer.byteLength(raw) });
         }
 
-        const threadId = parsed.messageId;
         const labelsJson = JSON.stringify(labelsArr);
-        db.prepare(
-          `INSERT INTO messages (
-            message_id, thread_id, folder, uid, labels, from_address, from_name,
-            to_addresses, cc_addresses, subject, date, body_text, raw_path, embedding_state
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`
-        ).run(
-          parsed.messageId,
-          threadId,
-          mailbox,
-          uid,
-          labelsJson,
-          parsed.fromAddress,
-          parsed.fromName,
-          JSON.stringify(parsed.toAddresses),
-          JSON.stringify(parsed.ccAddresses),
-          parsed.subject,
-          parsed.date,
-          parsed.bodyText,
-          relPath,
-        );
+        
+        // Persist message and thread using shared helper
+        persistMessage(db, parsed, mailbox, uid, labelsJson, relPath);
 
-        db.prepare(
-          `INSERT OR REPLACE INTO threads (thread_id, subject, participant_count, message_count, last_message_at)
-           VALUES (?, ?, 1, 1, ?)`
-        ).run(threadId, parsed.subject, parsed.date);
-
-        // Process attachments
-        if (parsed.attachments.length > 0) {
-          const attachmentsDir = join(config.maildirPath, "attachments", parsed.messageId);
-          mkdirSync(attachmentsDir, { recursive: true });
-
-          for (const att of parsed.attachments) {
-            const uniqueFilename = ensureUniqueFilename(attachmentsDir, att.filename);
-            const attachmentPath = join(attachmentsDir, uniqueFilename);
-            writeFileSync(attachmentPath, att.content, "binary");
-
-            const storedPath = join("attachments", parsed.messageId, uniqueFilename);
-            db.prepare(
-              `INSERT INTO attachments (message_id, filename, mime_type, size, stored_path, extracted_text)
-               VALUES (?, ?, ?, ?, ?, NULL)`
-            ).run(parsed.messageId, att.filename, att.mimeType, att.size, storedPath);
-          }
-        }
+        // Persist attachments using shared helper
+        persistAttachmentsFromParsed(db, parsed.messageId, parsed.attachments);
 
         // synced++ moved earlier (before logging)
         if (!earliestDate || parsed.date < earliestDate) earliestDate = parsed.date;
@@ -822,7 +765,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
           last_sync_at = datetime('now')
          WHERE id = 1`
       ).run(earliestDate, latestDate);
-      releaseLock(db, "sync_summary");
+      releaseLock(db, "sync_summary", process.pid);
 
       const durationMs = Date.now() - startTime;
       const durationSec = durationMs / 1000;
@@ -856,7 +799,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
       lock.release();
     }
     } catch (err) {
-      releaseLock(db, "sync_summary");
+      releaseLock(db, "sync_summary", process.pid);
       fileLogger.error("Sync failed", { error: String(err) });
       fileLogger.close();
       restoreLogger(); // Restore original logger even on error

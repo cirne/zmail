@@ -6,12 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+source "$SCRIPT_DIR/lib/common.sh"
 
 errors=0
 
@@ -19,18 +14,11 @@ check() {
     local description="$1"
     shift
     if "$@" >/dev/null 2>&1; then
-        echo -e "${GREEN}✓${NC} $description"
+        success "$description"
     else
-        echo -e "${RED}✗${NC} $description"
+        error "$description" || true  # Don't exit on check failure
         ((errors++))
     fi
-}
-
-section() {
-    echo ""
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}  $1${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 }
 
 section "Release Validation Checklist"

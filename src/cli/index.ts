@@ -1,20 +1,18 @@
-import { runSync } from "~/sync";
 import { searchWithMeta } from "~/search";
 import { who } from "~/search/who";
 import { indexMessages } from "~/search/indexing";
+import { runSyncAndIndex } from "~/cli/sync-orchestration";
 import { getDb, checkSchemaVersion } from "~/db";
 import { reindexFromMaildir } from "~/db/rebuild";
 import { startMcpServer } from "~/mcp";
 import { config } from "~/lib/config";
 import { logger, setLogger, SYNC_LOG_PATH, createFileLogger } from "~/lib/logger";
 import { parseSinceToDate } from "~/sync/parse-since";
-import { htmlToMarkdown } from "~/lib/content-normalize";
-import { parseRawMessage } from "~/sync/parse-message";
 import type { SearchResult, WhoResult } from "~/lib/types";
 import type { SqliteDatabase } from "~/db";
 import { readFileSync, existsSync, rmSync } from "fs";
 import { join } from "path";
-import { formatMessageLlmFriendly } from "~/cli/format-message";
+import { formatMessageForOutput, formatMessageLlmFriendly } from "~/messages/presenter";
 import { extractAndCache } from "~/attachments";
 import { getStatus, getImapServerStatus, formatTimeAgo } from "~/lib/status";
 import { spawn } from "child_process";
@@ -558,110 +556,7 @@ function parseRawFlag(rawArgs: string[], usage: string): { id: string; raw: bool
   return { id, raw };
 }
 
-function readRawEmail(rawPath: string): Buffer | null {
-  if (!rawPath) return null;
-  const absPath = join(config.maildirPath, rawPath);
-  try {
-    return readFileSync(absPath);
-  } catch {
-    return null;
-  }
-}
-
-export async function formatMessageForOutput(message: MessageRow, raw: boolean): Promise<Record<string, unknown>> {
-  const db = getDb();
-  const attachments = db
-    .prepare(
-      `SELECT id, filename, mime_type, size, stored_path, extracted_text
-       FROM attachments WHERE message_id = ? ORDER BY filename`
-    )
-    .all(message.message_id) as Array<{
-    id: number;
-    filename: string;
-    mime_type: string;
-    size: number;
-    stored_path: string;
-    extracted_text: string | null;
-  }>;
-
-  if (raw) {
-    const rawEmail = readRawEmail(message.raw_path);
-    return {
-      ...message,
-      content: {
-        format: "raw",
-        source: "eml",
-        eml: rawEmail ? rawEmail.toString("utf8") : null,
-      },
-      attachments: attachments.map((a) => ({
-        id: a.id,
-        filename: a.filename,
-        mimeType: a.mime_type,
-        size: a.size,
-        extracted: a.extracted_text !== null,
-      })),
-    };
-  }
-
-  const { body_text, ...rest } = message;
-  let body = (body_text ?? "").trim();
-  let source: "body_text" | "html" | "text" | "empty" = body ? "body_text" : "empty";
-
-  if (!body && message.raw_path) {
-    const rawEmail = readRawEmail(message.raw_path);
-    if (rawEmail) {
-      try {
-        const parsed = await parseRawMessage(rawEmail);
-        if (parsed.bodyHtml) {
-          const markdown = htmlToMarkdown(parsed.bodyHtml);
-          if (markdown) {
-            body = markdown;
-            source = "html";
-          }
-        }
-        if (!body && parsed.bodyText) {
-          body = (parsed.bodyText ?? "").trim();
-          if (body) source = "text";
-        }
-      } catch (err) {
-        // Log parsing errors for debugging
-        const { logger } = await import("~/lib/logger");
-        logger.warn("Failed to parse raw email for message", {
-          messageId: message.message_id,
-          rawPath: message.raw_path,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        // fall through to empty content
-      }
-    } else {
-      // Log when raw email file can't be read
-      const { logger } = await import("~/lib/logger");
-      logger.warn("Could not read raw email file", {
-        messageId: message.message_id,
-        rawPath: message.raw_path,
-      });
-    }
-  }
-
-  // Ensure body is never null/undefined - use empty string if parsing failed
-  const finalBody = body || "";
-  
-  return {
-    ...rest,
-    content: {
-      format: source === "html" ? "markdown" : "text",
-      source,
-      markdown: finalBody,
-    },
-    attachments: attachments.map((a) => ({
-      id: a.id,
-      filename: a.filename,
-      mimeType: a.mime_type,
-      size: a.size,
-      extracted: a.extracted_text !== null,
-    })),
-  };
-}
+// formatMessageForOutput is now imported from ~/messages/presenter
 
 /** Token-efficient hint for unknown command so the agent can self-correct. */
 function getUnknownCommandHint(unknownCommand: string): string {
@@ -833,26 +728,13 @@ async function main() {
 
       // Foreground mode: run synchronously (original behavior)
       if (foreground) {
-        // Run sync (bandwidth-bound) and indexing (API-rate-bound) concurrently (ADR-020).
-        // syncDone resolves when sync finishes inserting messages, signaling the indexer
-        // to drain the queue and exit — regardless of whether sync found 0 or 1000 messages.
-        let resolveSyncDone!: () => void;
-        const syncDone = new Promise<void>((resolve) => { resolveSyncDone = resolve; });
-
         // Sync always goes backward (fills gaps from most recent backward)
         const syncOptions: { since?: string; direction: 'backward' } = {
           direction: 'backward',
         };
         if (since) syncOptions.since = since;
 
-        const syncPromise = runSync(syncOptions).then((result) => {
-          resolveSyncDone();
-          return result;
-        });
-        const indexPromise = indexMessages({ syncDone });
-
-        // Wait for both to complete
-        const [syncResult, indexResult] = await Promise.all([syncPromise, indexPromise]);
+        const { syncResult, indexResult } = await runSyncAndIndex(syncOptions);
 
         if (syncResult) {
           const sec = (syncResult.durationMs / 1000).toFixed(2);
@@ -1283,23 +1165,12 @@ async function main() {
       // Usage: zmail refresh
       // No --since needed - uses last_uid checkpoint to fetch only new messages
 
-      // Run sync (bandwidth-bound) and indexing (API-rate-bound) concurrently (ADR-020).
-      let resolveSyncDone!: () => void;
-      const syncDone = new Promise<void>((resolve) => { resolveSyncDone = resolve; });
-
       // Refresh always goes forward (fetches new messages since last sync)
       const syncOptions: { direction: 'forward' } = {
         direction: 'forward',
       };
 
-      const syncPromise = runSync(syncOptions).then((result) => {
-        resolveSyncDone();
-        return result;
-      });
-      const indexPromise = indexMessages({ syncDone });
-
-      // Wait for both to complete
-      const [syncResult, indexResult] = await Promise.all([syncPromise, indexPromise]);
+      const { syncResult, indexResult } = await runSyncAndIndex(syncOptions);
 
       // Sync complete
       if (syncResult) {

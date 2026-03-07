@@ -3,6 +3,7 @@ import type { SearchResult } from "~/lib/types";
 import { embedText } from "./embeddings";
 import { searchVectors } from "./vectors";
 import { parseSearchQuery } from "./query-parse";
+import { buildFilterClause, buildWhereClause } from "./filter-compiler";
 
 // ResolvedSearchMode type removed - no longer needed
 
@@ -39,50 +40,17 @@ export interface SearchResultSet {
   };
 }
 
-/** LIKE pattern for partial match on address or display name (e.g. "donna" -> "%donna%"). */
-function fromFilterPattern(value: string): string {
-  return `%${value}%`;
-}
+// fromFilterPattern is now in filter-compiler.ts
 
 /**
  * Filter-only search (no query text, just WHERE clauses).
  */
 function filterOnlySearch(db: SqliteDatabase, opts: SearchOptions): SearchResult[] {
-  const { limit = 20, offset = 0, fromAddress, toAddress, subject, afterDate, beforeDate, filterOr } = opts;
-  const conditions: string[] = [];
-  const params: (string | number)[] = [];
+  const { limit = 20, offset = 0 } = opts;
+  const filterClause = buildFilterClause(opts);
+  const where = filterClause.conditions.length > 0 ? `WHERE ${buildWhereClause(filterClause)}` : "";
 
-  if (fromAddress) {
-    const pattern = fromFilterPattern(fromAddress);
-    const cond = "(m.from_address LIKE ? OR m.from_name LIKE ?)";
-    conditions.push(filterOr ? `(${cond})` : cond);
-    params.push(pattern, pattern);
-  }
-  if (toAddress) {
-    const pattern = fromFilterPattern(toAddress);
-    const cond = "(EXISTS (SELECT 1 FROM json_each(m.to_addresses) j WHERE j.value LIKE ?) OR EXISTS (SELECT 1 FROM json_each(m.cc_addresses) j WHERE j.value LIKE ?))";
-    conditions.push(filterOr ? `(${cond})` : cond);
-    params.push(pattern, pattern);
-  }
-  if (subject) {
-    const pattern = fromFilterPattern(subject);
-    const cond = "m.subject LIKE ?";
-    conditions.push(filterOr ? `(${cond})` : cond);
-    params.push(pattern);
-  }
-  if (afterDate) {
-    const cond = "m.date >= ?";
-    conditions.push(filterOr ? `(${cond})` : cond);
-    params.push(afterDate);
-  }
-  if (beforeDate) {
-    const cond = "m.date <= ?";
-    conditions.push(filterOr ? `(${cond})` : cond);
-    params.push(beforeDate);
-  }
-
-  params.push(limit, offset);
-  const where = `WHERE ${conditions.join(filterOr ? " OR " : " AND ")}`;
+  const params = [...filterClause.params, limit, offset];
   const rows = db
     .prepare(
       /* sql */ `
@@ -109,37 +77,16 @@ function filterOnlySearch(db: SqliteDatabase, opts: SearchOptions): SearchResult
  * FTS5 search (keyword matching via BM25).
  */
 function ftsSearch(db: SqliteDatabase, opts: SearchOptions): SearchResult[] {
-  const { query, limit = 20, offset = 0, fromAddress, toAddress, subject, afterDate, beforeDate } = opts;
+  const { query, limit = 20, offset = 0 } = opts;
   if (!query?.trim()) return [];
 
-  const conditions: string[] = ["messages_fts MATCH ?"];
-  const params: (string | number)[] = [query];
+  // Build filter clause with FTS MATCH condition
+  const filterClause = buildFilterClause(opts, true, "messages_fts MATCH ?");
+  const whereClause = buildWhereClause(filterClause);
+  const where = `WHERE ${whereClause}`;
 
-  if (fromAddress) {
-    const pattern = fromFilterPattern(fromAddress);
-    conditions.push("(m.from_address LIKE ? OR m.from_name LIKE ?)");
-    params.push(pattern, pattern);
-  }
-  if (toAddress) {
-    const pattern = fromFilterPattern(toAddress);
-    conditions.push("(EXISTS (SELECT 1 FROM json_each(m.to_addresses) j WHERE j.value LIKE ?) OR EXISTS (SELECT 1 FROM json_each(m.cc_addresses) j WHERE j.value LIKE ?))");
-    params.push(pattern, pattern);
-  }
-  if (subject) {
-    const pattern = fromFilterPattern(subject);
-    conditions.push("m.subject LIKE ?");
-    params.push(pattern);
-  }
-  if (afterDate) {
-    conditions.push("m.date >= ?");
-    params.push(afterDate);
-  }
-  if (beforeDate) {
-    conditions.push("m.date <= ?");
-    params.push(beforeDate);
-  }
-
-  params.push(limit + offset + 50);
+  // FTS search params: query first, then filter params
+  const params = [query, ...filterClause.params, limit + offset + 50];
 
   const rows = db
     .prepare(
@@ -155,32 +102,15 @@ function ftsSearch(db: SqliteDatabase, opts: SearchOptions): SearchResult[] {
         rank
       FROM messages_fts
       JOIN messages m ON m.id = messages_fts.rowid
-      WHERE ${conditions.join(" AND ")}
+      ${where}
       ORDER BY rank
       LIMIT ?
     `
     )
     .all(...params) as SearchResult[];
 
-  // Apply filters and limit/offset (post-query filtering for toAddress/subject if needed)
-  let filtered = rows;
-  if (fromAddress || toAddress || subject || afterDate || beforeDate) {
-    filtered = rows.filter((r) => {
-      if (fromAddress) {
-        const pattern = fromAddress.toLowerCase();
-        const fromMatch =
-          r.fromAddress.toLowerCase().includes(pattern) ||
-          (r.fromName && r.fromName.toLowerCase().includes(pattern));
-        if (!fromMatch) return false;
-      }
-      // Note: toAddress and subject are already filtered in SQL, but we keep this for consistency
-      if (afterDate && r.date < afterDate) return false;
-      if (beforeDate && r.date > beforeDate) return false;
-      return true;
-    });
-  }
-
-  return filtered.slice(offset, offset + limit);
+  // Apply post-query filtering and limit/offset
+  return rows.slice(offset, offset + limit);
 }
 
 /**
@@ -191,7 +121,7 @@ async function vectorSearchFromEmbedding(
   opts: SearchOptions,
   queryEmbedding: number[]
 ): Promise<{ results: SearchResult[]; rawScores: Map<string, number> }> {
-  const { query, limit = 20, offset = 0, fromAddress, toAddress, subject, afterDate, beforeDate } = opts;
+  const { query, limit = 20, offset = 0 } = opts;
   if (!query?.trim()) return { results: [], rawScores: new Map() };
 
   // Search LanceDB for similar messages
@@ -205,31 +135,16 @@ async function vectorSearchFromEmbedding(
   if (messageIds.length === 0) return { results: [], rawScores: new Map() };
 
   const placeholders = messageIds.map(() => "?").join(",");
+  
+  // Build filter clause (message_id IN condition is handled separately for vector search)
+  const filterClause = buildFilterClause(opts);
   const conditions: string[] = [`m.message_id IN (${placeholders})`];
   const params: (string | number)[] = [...messageIds];
-
-  if (fromAddress) {
-    const pattern = fromFilterPattern(fromAddress);
-    conditions.push("(m.from_address LIKE ? OR m.from_name LIKE ?)");
-    params.push(pattern, pattern);
-  }
-  if (toAddress) {
-    const pattern = fromFilterPattern(toAddress);
-    conditions.push("(EXISTS (SELECT 1 FROM json_each(m.to_addresses) j WHERE j.value LIKE ?) OR EXISTS (SELECT 1 FROM json_each(m.cc_addresses) j WHERE j.value LIKE ?))");
-    params.push(pattern, pattern);
-  }
-  if (subject) {
-    const pattern = fromFilterPattern(subject);
-    conditions.push("m.subject LIKE ?");
-    params.push(pattern);
-  }
-  if (afterDate) {
-    conditions.push("m.date >= ?");
-    params.push(afterDate);
-  }
-  if (beforeDate) {
-    conditions.push("m.date <= ?");
-    params.push(beforeDate);
+  
+  // Add filter conditions (always AND for vector search since we're filtering already-matched results)
+  if (filterClause.conditions.length > 0) {
+    conditions.push(...filterClause.conditions);
+    params.push(...filterClause.params);
   }
 
   // Fetch messages and preserve vector search order

@@ -209,8 +209,7 @@ export function createMcpServer() {
     },
     async ({ messageId, raw = false }) => {
       const db = getDb();
-      const { formatMessageForOutput } = await import("~/cli");
-      const { formatMessageLlmFriendly } = await import("~/cli/format-message");
+      const { formatMessageForOutput, formatMessageLlmFriendly } = await import("~/messages/presenter");
       
       const normalizedId = normalizeMessageId(messageId);
       const message = db
@@ -251,7 +250,7 @@ export function createMcpServer() {
     },
     async ({ threadId, raw = false }) => {
       const db = getDb();
-      const { formatMessageForOutput } = await import("~/cli");
+      const { formatMessageForOutput } = await import("~/messages/presenter");
       
       const normalizedThreadId = normalizeMessageId(threadId);
       const messages = db

@@ -361,7 +361,7 @@ export async function indexMessages(options?: {
     WHERE id = 1`
   ).run(totalIndexed);
 
-  releaseLock(db, "indexing_status");
+  releaseLock(db, "indexing_status", process.pid);
 
   const durationMs = Date.now() - startTime;
   const messagesPerMinute =
