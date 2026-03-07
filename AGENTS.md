@@ -95,8 +95,8 @@ The CLI prints the log file path to stdout (e.g., `Sync log: ~/.zmail/logs/sync-
 
 ```bash
 zmail attachment list <message_id>       # list attachments for a message (JSON)
-zmail attachment read <attachment_id>     # extract attachment as markdown/CSV (stdout)
-zmail attachment read <attachment_id> --raw  # output raw binary (pipe to file)
+zmail attachment read <message_id> <index>|<filename>   # extract as markdown/CSV (stdout); index 1-based or exact filename
+zmail attachment read <message_id> <index>|<filename> [--raw] [--no-cache]   # --raw: binary; --no-cache: re-extract
 ```
 
 Supported formats: PDF, DOCX, XLSX, HTML, CSV, TXT. Extraction happens on first read and is cached in the DB.

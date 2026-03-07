@@ -53,7 +53,7 @@ Search emails using hybrid search (semantic + FTS5) by default. Returns matching
 
 ### `get_message`
 
-Retrieve a single message by message ID. Returns message content in LLM-friendly format.
+Retrieve a single message by message ID. Returns message content in LLM-friendly format. Message IDs can be passed with or without angle brackets; the server normalizes them.
 
 **Parameters:**
 - `messageId` (string, required): Message ID (from `search_mail` results)
@@ -71,7 +71,7 @@ Retrieve a single message by message ID. Returns message content in LLM-friendly
 
 ### `get_thread`
 
-Retrieve a full conversation thread by thread ID. Returns all messages in the thread ordered by date.
+Retrieve a full conversation thread by thread ID. Returns all messages in the thread ordered by date. Thread IDs can be passed with or without angle brackets; the server normalizes them.
 
 **Parameters:**
 - `threadId` (string, required): Thread ID (from `search_mail` or `get_message` results)
@@ -123,7 +123,7 @@ Get sync and indexing status. Returns current state of sync (running/idle, last 
 - `indexing`: `{ isRunning, totalToIndex, indexedSoFar, startedAt, completedAt, totalIndexed, totalFailed, pending }`
 - `search`: `{ ftsReady, semanticReady }`
 - `dateRange`: `{ earliest, latest }` or `null`
-- `freshness`: `{ latestMailAgo, lastSyncAgo }` — human-readable duration + ISO 8601 (e.g. `{ human: "2h ago", duration: "PT2H" }`), or `null` when not applicable
+- `freshness`: `{ latestMailAgo, lastSyncAgo }` — each value is `null` or `{ human: string, duration: string }` (e.g. `{ human: "2h ago", duration: "PT2H" }`); `null` when not applicable
 
 **Example:**
 ```json
@@ -149,12 +149,12 @@ Get database statistics. Returns total message count, date range, top senders (t
 
 ### `list_attachments`
 
-List all attachments for a message.
+List all attachments for a message. Message IDs can be passed with or without angle brackets; the server normalizes them.
 
 **Parameters:**
-- `messageId` (string, required): Message ID to list attachments for
+- `messageId` (string, required): Message ID (from `search_mail` or `get_message`) to list attachments for
 
-**Returns:** JSON array of attachment metadata objects with `id`, `filename`, `mimeType`, `size`, `extracted` (boolean)
+**Returns:** JSON array of attachment metadata objects with `id`, `filename`, `mimeType`, `size`, `extracted` (boolean). Use `id` with `read_attachment`.
 
 **Example:**
 ```json
@@ -252,6 +252,17 @@ No additional MCP-specific configuration is required. The server reads the datab
 | **Transport** | Process invocation | Persistent stdio connection |
 
 Both interfaces share the same underlying index and data. A message synced via `zmail sync` is immediately available via MCP `search_mail`, and vice versa.
+
+### CLI arguments (quick reference)
+
+- **search:** `zmail search <query> [--limit n] [--fts] [--detail headers|snippet|body] [--fields csv] [--ids-only] [--timings] [--text] [--from addr] [--after date] [--before date]`
+- **who:** `zmail who <query> [--limit n] [--min-sent n] [--min-received n] [--all] [--enrich] [--text]`
+- **status:** `zmail status [--json] [--imap]` — `--imap` compares local DB with IMAP server (CLI-only).
+- **stats:** `zmail stats [--json]`
+- **read:** `zmail read <message_id> [--raw]` (alias: `zmail message`)
+- **thread:** `zmail thread <thread_id> [--json] [--raw]`
+- **attachment list:** `zmail attachment list <message_id> [--text]`
+- **attachment read:** `zmail attachment read <message_id> <index>|<filename> [--raw] [--no-cache]` — CLI uses message_id + 1-based index or filename; MCP uses numeric attachment `id` from `list_attachments`.
 
 ## Future Work
 

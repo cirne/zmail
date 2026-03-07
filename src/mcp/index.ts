@@ -11,6 +11,31 @@ import { config } from "~/lib/config";
 import { getStatus, formatTimeAgo } from "~/lib/status";
 
 /**
+ * Param keys for search_mail tool. Used by CLI/MCP sync test; keep in sync with the tool schema and SearchOptions.
+ */
+export const MCP_SEARCH_MAIL_PARAM_KEYS: readonly string[] = [
+  "query",
+  "limit",
+  "offset",
+  "fromAddress",
+  "afterDate",
+  "beforeDate",
+  "fts",
+];
+
+/**
+ * Param keys for who tool. Used by CLI/MCP sync test; keep in sync with the tool schema and WhoOptions.
+ */
+export const MCP_WHO_PARAM_KEYS: readonly string[] = [
+  "query",
+  "limit",
+  "minSent",
+  "minReceived",
+  "includeNoreply",
+  "enrich",
+];
+
+/**
  * Normalizes a message/thread ID to ensure it's wrapped in angle brackets.
  */
 export function normalizeMessageId(id: string): string {
@@ -79,12 +104,13 @@ export function createMcpServer() {
     },
     async ({ messageId }) => {
       const db = getDb();
+      const normalizedId = normalizeMessageId(messageId);
       const attachments = db
         .prepare(
           `SELECT id, filename, mime_type, size, stored_path, extracted_text
            FROM attachments WHERE message_id = ? ORDER BY filename`
         )
-        .all(messageId) as Array<{
+        .all(normalizedId) as Array<{
         id: number;
         filename: string;
         mime_type: string;
@@ -186,9 +212,10 @@ export function createMcpServer() {
       const { formatMessageForOutput } = await import("~/cli");
       const { formatMessageLlmFriendly } = await import("~/cli/format-message");
       
+      const normalizedId = normalizeMessageId(messageId);
       const message = db
         .prepare("SELECT * FROM messages WHERE message_id = ?")
-        .get(messageId) as any | undefined;
+        .get(normalizedId) as any | undefined;
       
       if (!message) {
         return {

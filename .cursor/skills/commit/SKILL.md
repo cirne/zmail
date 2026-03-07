@@ -20,6 +20,7 @@ Before committing any changes, verify all items in this checklist are satisfied.
   - Review `AGENTS.md` — update if CLI/interface changed
   - Review `docs/ARCHITECTURE.md` — update if technical decisions changed
   - Review `docs/MCP.md` — update if MCP interface changed
+  - **CLI/MCP sync (if CLI or MCP code changed):** Ensure CLI and MCP stay aligned where they share behavior. If you changed CLI commands, flags, or behavior (e.g. `src/cli/index.ts`, search/who parsing), verify: (1) MCP tools in `src/mcp/index.ts` expose the same options where applicable (e.g. search_mail ↔ search, who ↔ who, get_message/get_thread/list_attachments); (2) `docs/MCP.md` "Available Tools" and "CLI arguments (quick reference)" are updated; (3) `AGENTS.md` attachment/command usage is correct. Run `npm test` — the CLI/MCP sync test will fail if MCP param lists drift from the intended contract.
   - **Verify all links are correct** — especially after moving files to archive
   - **Check for outdated references** — remove references to removed features/flags
   - **Organize bug backlog** — ensure fixed bugs are archived, superseded bugs are noted

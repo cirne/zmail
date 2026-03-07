@@ -1628,12 +1628,12 @@ Usage:
   zmail refresh                    Refresh: fetch new messages since last sync (frequent updates)
   zmail search <query> [flags]     Search email (hybrid by default; use --fts for exact keyword matching)
   zmail who <query> [flags]        Find people by address or name (see --help for flags)
-  zmail status                     Show sync and indexing status
-  zmail stats                      Show database statistics
+  zmail status [--json] [--imap]   Sync/indexing status; --imap: compare with server
+  zmail stats [--json]             Database statistics
   zmail read <id> [--raw]          Read a message (or: zmail message <id>)
-  zmail thread <id> [--json]      Fetch thread (text by default; --json for structured output)
+  zmail thread <id> [--json] [--raw]   Fetch thread (text by default)
   zmail attachment list <message_id>   List attachments (use message_id from search)
-  zmail attachment read <message_id> <index>|<filename>   Read by index (1-based) or filename
+  zmail attachment read <message_id> <index>|<filename> [--raw] [--no-cache]   Read by index (1-based) or filename
   zmail mcp                        Start MCP server (stdio)
 
 Agent interfaces:
