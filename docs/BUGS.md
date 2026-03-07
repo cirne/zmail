@@ -10,6 +10,10 @@ When an agent or user hits a failure, we document it here. Root cause and "agent
 |---|---|---|
 | [BUG-004](bugs/BUG-004-attachment-read-silent-failure.md) | Attachment Read Silent Failure — Agent-Reported | `zmail attachment read` fails silently (exit 1, no output) when given invalid index (e.g. 0). Help text doesn't clarify 0-based vs 1-based. |
 | [BUG-005](bugs/BUG-005-xlsx-formula-cells-object-object.md) | XLSX Formula Cells Render as `[object Object]` — Agent-Reported | XLSX cells with formulas render as `[object Object]` instead of computed values; USD/totals lost in extracted CSV. |
+| [BUG-006](bugs/BUG-006-sync-repeated-connecting-message.md) | Sync Repeated "Connecting" Message in Non-TTY Mode — Agent-Reported | `zmail sync` prints "Connecting to IMAP server..." 11 times concatenated in non-TTY mode due to missing TTY detection for cursor overwrite tricks. |
+| [BUG-007](bugs/BUG-007-sync-silent-auth-failure.md) | Sync Silent Authentication Failure — Agent-Reported | `zmail sync` reports success (exit 0) with invalid credentials; background sync crashes silently during IMAP auth, no error surfaced. |
+| [BUG-008](bugs/BUG-008-who-case-sensitive-email-dedup.md) | `zmail who` Case-Sensitive Email Deduplication — Agent-Reported | `zmail who` treats email addresses as case-sensitive, creating duplicate entries for the same person when addresses appear in different cases. |
+| [BUG-009](bugs/BUG-009-wizard-crash-non-interactive.md) | `zmail wizard` Crashes with Stack Trace on Non-Interactive Stdin — Agent-Reported | `zmail wizard` crashes with unhandled `ExitPromptError` and full stack trace when run in non-TTY mode; missing TTY guard. |
 
 ---
 
