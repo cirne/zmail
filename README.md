@@ -84,7 +84,7 @@ Query can use inline operators: `from:`, `to:`, `subject:`, `after:`, `before:` 
 
 ### Agent interfaces
 
-- **CLI**: Use for direct subprocess calls. Fast for one-off queries, returns JSON with `--json` flag.
+- **CLI**: Use for direct subprocess calls. Fast for one-off queries. Commands default to JSON (search, who, attachment list) or text (read, thread, status, stats). Use `--text` or `--json` flags to override.
 - **MCP**: Use for persistent tool-based integration. Run `zmail mcp` to start stdio server. See [`docs/MCP.md`](docs/MCP.md) for details.
 
 ### Recommended agent retrieval pattern

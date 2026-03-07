@@ -16,6 +16,9 @@ import { join } from "path";
 import { formatMessageLlmFriendly } from "~/cli/format-message";
 import { extractAndCache } from "~/attachments";
 import { getStatus, getImapServerStatus } from "~/lib/status";
+import { spawn } from "child_process";
+import { isProcessAlive } from "~/lib/process-lock";
+import { SYNC_LOG_PATH } from "~/lib/file-logger";
 
 // When invoked as "tsx index.ts -- <cmd>", argv[2] is "--" and argv[3] is the command
 const rest = process.argv.slice(2);
@@ -75,7 +78,7 @@ interface ParsedSearchArgs {
   fts: boolean;
   detail: SearchDetail;
   fields?: SearchField[];
-  forceJson: boolean;
+  forceText: boolean;
   idsOnly: boolean;
   timings: boolean;
 }
@@ -95,7 +98,7 @@ function searchUsage() {
   console.error("  --fields <csv>     projection fields, e.g. messageId,subject,date");
   console.error("  --ids-only         return only message IDs");
   console.error("  --timings          include machine-readable search timings");
-  console.error("  --json             force JSON output (default: table for TTY, JSON when piped)");
+  console.error("  --text             human-readable table output (default: JSON)");
 }
 
 interface ParsedWhoArgs {
@@ -103,12 +106,12 @@ interface ParsedWhoArgs {
   limit?: number;
   minSent?: number;
   minReceived?: number;
-  forceJson: boolean;
+  forceText: boolean;
 }
 
 function whoUsage() {
   console.error("Usage: zmail who <query> [flags]");
-  console.error("  --json             output JSON (default: table for TTY, JSON when piped)");
+  console.error("  --text             human-readable table output (default: JSON)");
   console.error("  --limit <n>        max results (default: 50)");
   console.error("  --min-sent <n>     minimum sent count");
   console.error("  --min-received <n> minimum received count");
@@ -117,7 +120,7 @@ function whoUsage() {
 function parseWhoArgs(rawArgs: string[]): ParsedWhoArgs {
   const parsed: ParsedWhoArgs = {
     query: "",
-    forceJson: false,
+    forceText: false,
   };
 
   const queryParts: string[] = [];
@@ -137,8 +140,8 @@ function parseWhoArgs(rawArgs: string[]): ParsedWhoArgs {
       whoUsage();
       process.exit(0);
     }
-    if (arg === "--json") {
-      parsed.forceJson = true;
+    if (arg === "--text") {
+      parsed.forceText = true;
       continue;
     }
     if (arg === "--limit") {
@@ -201,7 +204,7 @@ function parseSearchArgs(rawArgs: string[]): ParsedSearchArgs {
     query: "",
     fts: false,
     detail: "headers",
-    forceJson: false,
+    forceText: false,
     idsOnly: false,
     timings: false,
   };
@@ -223,8 +226,8 @@ function parseSearchArgs(rawArgs: string[]): ParsedSearchArgs {
       searchUsage();
       process.exit(0);
     }
-    if (arg === "--json") {
-      parsed.forceJson = true;
+    if (arg === "--text") {
+      parsed.forceText = true;
       continue;
     }
     if (arg === "--ids-only") {
@@ -614,74 +617,252 @@ function getUnknownCommandHint(unknownCommand: string): string {
   return "Run 'zmail' for usage.";
 }
 
+/**
+ * Print sync and indexing status (reusable for status command and early exits)
+ */
+function printStatus(db: SqliteDatabase = getDb()): void {
+  const status = getStatus(db);
+
+  // Calculate progress or status message if we have target, start, and current earliest dates
+  // Only count NEW emails synced in this run, not pre-existing ones
+  let progressText = "";
+  if (status.sync.targetStartDate && status.sync.syncStartEarliestDate && status.sync.earliestSyncedDate) {
+    try {
+      // Parse dates (handle both YYYY-MM-DD and ISO format)
+      const targetDateStr = status.sync.targetStartDate.slice(0, 10); // YYYY-MM-DD
+      const startEarliestStr = status.sync.syncStartEarliestDate.slice(0, 10); // Where we started this sync
+      const currentEarliestStr = status.sync.earliestSyncedDate.slice(0, 10); // Where we are now
+      
+      const targetDate = new Date(targetDateStr + "T00:00:00Z");
+      const startEarliestDate = new Date(startEarliestStr + "T00:00:00Z");
+      const currentEarliestDate = new Date(currentEarliestStr + "T00:00:00Z");
+      
+      // If we've already reached or passed the target, show 100%
+      if (currentEarliestDate <= targetDate) {
+        progressText = " (100% complete)";
+      } else if (currentEarliestDate >= startEarliestDate) {
+        // Still reviewing previously synced emails (haven't reached new emails yet)
+        progressText = " (reviewing existing emails)";
+      } else {
+        // We're syncing new emails - calculate progress percentage
+        // Total range to sync: from where we started (or target, whichever is older) down to target
+        // Use the more recent (larger) date as the starting point
+        const syncStartPoint = startEarliestDate > targetDate ? startEarliestDate : targetDate;
+        const totalRangeDays = Math.ceil((syncStartPoint.getTime() - targetDate.getTime()) / (1000 * 60 * 60 * 24));
+        
+        // Progress made: how far we've gone from start point toward target
+        const progressRangeDays = Math.ceil((syncStartPoint.getTime() - currentEarliestDate.getTime()) / (1000 * 60 * 60 * 24));
+        
+        if (totalRangeDays > 0) {
+          const progress = Math.min(100, Math.max(0, Math.round((progressRangeDays / totalRangeDays) * 100)));
+          progressText = ` (${progress}% complete)`;
+        } else if (startEarliestDate <= targetDate) {
+          // Already at or past target when sync started
+          progressText = " (100% complete)";
+        }
+      }
+    } catch (err) {
+      // Invalid date format, skip progress
+    }
+  }
+
+  // Sync status
+  if (status.sync.isRunning) {
+    console.log(`Sync:      running${progressText}`);
+  } else if (status.sync.lastSyncAt) {
+    console.log(`Sync:      idle (last: ${status.sync.lastSyncAt.slice(0, 10)}, ${status.sync.totalMessages} messages)${progressText}`);
+  } else {
+    console.log(`Sync:      never run`);
+  }
+
+  // Indexing status
+  if (status.indexing.isRunning) {
+    // SQLite datetime('now') is UTC but has no 'Z'; parse as UTC to avoid negative elapsed (local-time parse)
+    const startedMs = status.indexing.startedAt
+      ? (status.indexing.startedAt.includes("Z") || status.indexing.startedAt.includes("+")
+          ? new Date(status.indexing.startedAt).getTime()
+          : new Date(status.indexing.startedAt.replace(" ", "T") + "Z").getTime())
+      : 0;
+    const elapsed = startedMs ? Math.round((Date.now() - startedMs) / 1000) : 0;
+    // total_to_index can be 0 when sync+index start together (pending was 0 at start); use live total for display
+    const displayTotal = Math.max(status.indexing.totalToIndex, status.indexing.indexedSoFar + status.indexing.pending);
+    console.log(`Indexing:  running (${status.indexing.indexedSoFar}/${displayTotal} indexed${status.indexing.totalFailed > 0 ? `, ${status.indexing.totalFailed} failed` : ''}, ${elapsed}s elapsed)`);
+  } else if (status.indexing.completedAt) {
+    console.log(`Indexing:  idle (last: ${status.indexing.completedAt.slice(0, 10)}, ${status.indexing.totalIndexed} indexed${status.indexing.totalFailed > 0 ? `, ${status.indexing.totalFailed} failed` : ''})`);
+  } else {
+    console.log(`Indexing:  never run`);
+  }
+
+  // Search readiness
+  console.log(`Search:    FTS ready (${status.search.ftsReady}) | Semantic ready (${status.search.semanticReady})`);
+
+  // Date range
+  if (status.dateRange) {
+    const earliest = status.dateRange.earliest.slice(0, 10);
+    const latest = status.dateRange.latest.slice(0, 10);
+    console.log(`Range:     ${earliest} .. ${latest}`);
+  }
+}
+
 async function main() {
   switch (command) {
     case "sync": {
       // Sync: Initial setup, goes backward to fill gaps
-      // Usage: zmail sync [--since <spec>]
+      // Usage: zmail sync [--since <spec>] [--foreground]
       const sinceIdx = args.indexOf("--since");
       const since = sinceIdx >= 0 ? args[sinceIdx + 1] : undefined;
       if (sinceIdx >= 0 && (since === undefined || since.startsWith("-"))) {
-        console.error("Usage: zmail sync [--since <spec>]");
+        console.error("Usage: zmail sync [--since <spec>] [--foreground]");
         console.error("  --since  relative range: 7d, 5w, 3m, 2y (days, weeks, months, years)");
+        console.error("  --foreground  run synchronously (default: background subprocess)");
         console.error("");
         console.error("Syncs email going backward from most recent, filling gaps in the specified date range.");
         console.error("Typically used for initial setup. For frequent updates, use 'zmail refresh'.");
         process.exit(1);
       }
 
-      // Run sync (bandwidth-bound) and indexing (API-rate-bound) concurrently (ADR-020).
-      // syncDone resolves when sync finishes inserting messages, signaling the indexer
-      // to drain the queue and exit — regardless of whether sync found 0 or 1000 messages.
-      let resolveSyncDone!: () => void;
-      const syncDone = new Promise<void>((resolve) => { resolveSyncDone = resolve; });
+      const foreground = args.includes("--foreground") || args.includes("--fg");
 
-      // Sync always goes backward (fills gaps from most recent backward)
-      const syncOptions: { since?: string; direction: 'backward'; onLogPath?: (logPath: string) => void } = {
-        direction: 'backward',
-      };
-      if (since) syncOptions.since = since;
-      
-      // Print log path immediately when sync starts (useful for background execution)
-      // Note: sync/index.ts already prints this synchronously, but we keep the callback for API consistency
-      syncOptions.onLogPath = (_logPath: string) => {
-        // Already printed by sync/index.ts
-      };
+      // Foreground mode: run synchronously (original behavior)
+      if (foreground) {
+        // Run sync (bandwidth-bound) and indexing (API-rate-bound) concurrently (ADR-020).
+        // syncDone resolves when sync finishes inserting messages, signaling the indexer
+        // to drain the queue and exit — regardless of whether sync found 0 or 1000 messages.
+        let resolveSyncDone!: () => void;
+        const syncDone = new Promise<void>((resolve) => { resolveSyncDone = resolve; });
 
-      const syncPromise = runSync(syncOptions).then((result) => {
-        resolveSyncDone();
-        return result;
+        // Sync always goes backward (fills gaps from most recent backward)
+        const syncOptions: { since?: string; direction: 'backward' } = {
+          direction: 'backward',
+        };
+        if (since) syncOptions.since = since;
+
+        const syncPromise = runSync(syncOptions).then((result) => {
+          resolveSyncDone();
+          return result;
+        });
+        const indexPromise = indexMessages({ syncDone });
+
+        // Wait for both to complete
+        const [syncResult, indexResult] = await Promise.all([syncPromise, indexPromise]);
+
+        if (syncResult) {
+          const sec = (syncResult.durationMs / 1000).toFixed(2);
+          const mb = (syncResult.bytesDownloaded / (1024 * 1024)).toFixed(2);
+          const kbps = (syncResult.bandwidthBytesPerSec / 1024).toFixed(1);
+          console.log("");
+          console.log("Sync metrics:");
+          console.log(`  messages:  ${syncResult.synced} new, ${syncResult.messagesFetched} fetched`);
+          console.log(`  downloaded: ${mb} MB (${syncResult.bytesDownloaded} bytes)`);
+          console.log(`  bandwidth: ${kbps} KB/s`);
+          console.log(`  throughput: ${Math.round(syncResult.messagesPerMinute)} msg/min`);
+          console.log(`  duration:  ${sec}s`);
+        }
+
+        if (indexResult.indexed > 0 || indexResult.failed > 0) {
+          const sec = (indexResult.durationMs / 1000).toFixed(2);
+          console.log("");
+          console.log("Indexing metrics:");
+          console.log(`  indexed:    ${indexResult.indexed}`);
+          if (indexResult.skipped > 0) console.log(`  skipped:    ${indexResult.skipped}`);
+          if (indexResult.failed > 0) console.log(`  failed:     ${indexResult.failed}`);
+          console.log(`  throughput: ${indexResult.messagesPerMinute} msg/min`);
+          console.log(`  duration:   ${sec}s`);
+        }
+        break;
+      }
+
+      // Background mode (default): spawn subprocess, wait until data flows, then exit
+      const db = getDb();
+
+      // Check lock before spawning
+      const syncRow = db.prepare("SELECT is_running, owner_pid FROM sync_summary WHERE id = 1").get() as
+        | { is_running: number; owner_pid: number | null }
+        | undefined;
+      if (syncRow?.is_running) {
+        console.log(`Sync already running (PID: ${syncRow.owner_pid})\n`);
+        printStatus(db);
+        process.exit(0);
+      }
+
+      // Detect first-time indexing
+      const messageCount = db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number };
+      const isFirstTime = messageCount.count === 0;
+
+      // Spawn subprocess
+      const entrypointScript = join(import.meta.dirname, "..", "index.ts");
+      const subprocessArgs = ["tsx", entrypointScript, "--", "sync", "--foreground"];
+      if (since) {
+        subprocessArgs.push("--since", since);
+      }
+
+      const proc = spawn("npx", subprocessArgs, {
+        cwd: process.cwd(),
+        env: { ...process.env },
+        stdio: "ignore",
+        detached: true,
       });
-      const indexPromise = indexMessages({ syncDone });
+      proc.unref();
 
-      // Wait for both to complete
-      const [syncResult, indexResult] = await Promise.all([syncPromise, indexPromise]);
+      const pid = proc.pid!;
+      const logPath = SYNC_LOG_PATH;
 
-      // Log path already printed at start via onLogPath callback
-      if (syncResult) {
-        const sec = (syncResult.durationMs / 1000).toFixed(2);
-        const mb = (syncResult.bytesDownloaded / (1024 * 1024)).toFixed(2);
-        const kbps = (syncResult.bandwidthBytesPerSec / 1024).toFixed(1);
-        console.log("");
-        console.log("Sync metrics:");
-        console.log(`  messages:  ${syncResult.synced} new, ${syncResult.messagesFetched} fetched`);
-        console.log(`  downloaded: ${mb} MB (${syncResult.bytesDownloaded} bytes)`);
-        console.log(`  bandwidth: ${kbps} KB/s`);
-        console.log(`  throughput: ${Math.round(syncResult.messagesPerMinute)} msg/min`);
-        console.log(`  duration:  ${sec}s`);
+      // Poll until exit condition
+      const POLL_INTERVAL_MS = 2000;
+      const MAX_WAIT_MS = 60_000; // 1 minute (aim for 30s wow, but large mailboxes take longer to connect)
+      const TARGET_COUNT = 20;
+      const startTime = Date.now();
+      let exitReason: 'data' | 'done' | 'timeout' = 'timeout';
+      const imapHost = config.imap.host;
+
+      while (Date.now() - startTime < MAX_WAIT_MS) {
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+        const { count } = db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number };
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        
+        if (count === 0) {
+          // Still connecting - show IMAP hostname
+          process.stdout.write(`\rConnecting to IMAP server at ${imapHost}...`);
+        } else {
+          // Emails are flowing - show progress
+          process.stdout.write(`\rWaiting for email... ${count} synced (${elapsed}s)`);
+        }
+
+        if (count >= TARGET_COUNT) {
+          exitReason = 'data';
+          break;
+        }
+        if (!isProcessAlive(pid)) {
+          exitReason = 'done';
+          break;
+        }
+      }
+      process.stdout.write("\n");
+
+      // Print exit output
+      // Always print PID, log, and status
+      console.log("\nSync running in background.");
+      console.log(`  PID:    ${pid}`);
+      console.log(`  Log:    ${logPath}`);
+      console.log(`  Status: zmail status`);
+
+      // Add encouraging first-time messages
+      if (exitReason === 'data' && isFirstTime) {
+        const { count } = db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number };
+        console.log(`\nData is flowing! ${count} messages synced so far — search is ready.\n`);
+        console.log("Try a few queries to see what's in your inbox:");
+        console.log('  zmail search "invoice"');
+        console.log('  zmail search "from:boss@example.com"');
+        console.log('  zmail who "alice"');
+      } else if (exitReason === 'done' && isFirstTime) {
+        const { count } = db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number };
+        console.log(`\nSync complete! ${count} messages synced and indexed.`);
+        console.log("Try: zmail search \"your query\"  |  zmail who \"name\"");
+      } else if (exitReason === 'timeout') {
+        console.log("\n(Large mailboxes may take longer to connect — sync continues in background)");
       }
 
-      if (indexResult.indexed > 0 || indexResult.failed > 0) {
-        const sec = (indexResult.durationMs / 1000).toFixed(2);
-        console.log("");
-        console.log("Indexing metrics:");
-        console.log(`  indexed:    ${indexResult.indexed}`);
-        if (indexResult.skipped > 0) console.log(`  skipped:    ${indexResult.skipped}`);
-        if (indexResult.failed > 0) console.log(`  failed:     ${indexResult.failed}`);
-        console.log(`  throughput: ${indexResult.messagesPerMinute} msg/min`);
-        console.log(`  duration:   ${sec}s`);
-      }
-      break;
+      process.exit(0);
     }
 
     case "search": {
@@ -695,9 +876,8 @@ async function main() {
         process.exit(1);
       }
 
-      const isTty = process.stdout.isTTY;
       const forceJsonForAdvancedFlags = parsed.idsOnly || parsed.timings || !!parsed.fields?.length;
-      const shouldOutputJson = parsed.forceJson || !isTty || forceJsonForAdvancedFlags;
+      const shouldOutputJson = !parsed.forceText || forceJsonForAdvancedFlags;
       let effectiveLimit = parsed.limit;
       if (shouldOutputJson && effectiveLimit && effectiveLimit > JSON_LIMIT_CAP) {
         console.error(
@@ -773,7 +953,7 @@ async function main() {
         }
       }
       
-      // Show actionable hints after results (only in TTY, not JSON)
+      // Show actionable hints after results (only in text mode, not JSON)
       const hint = getSearchHint(parsed.query, results.length, results.length, effectiveLimit, run._meta);
       if (hint) {
         console.log(`\n${hint}`);
@@ -791,8 +971,7 @@ async function main() {
         process.exit(1);
       }
 
-      const isTty = process.stdout.isTTY;
-      const shouldOutputJson = whoParsed.forceJson || !isTty;
+      const shouldOutputJson = !whoParsed.forceText;
 
       const db = getDb();
       const ownerAddress = config.imap.user?.trim() || undefined;
@@ -826,21 +1005,62 @@ async function main() {
     }
 
     case "thread": {
-      let parsed;
-      try {
-        parsed = parseRawFlag(args, "zmail thread <thread_id> [--raw]");
-      } catch (err) {
-        console.error(err instanceof Error ? err.message : String(err));
-        process.exit(1);
+      let threadId: string | undefined;
+      let raw = false;
+      let json = false;
+
+      for (const arg of args) {
+        if (arg === "--raw") {
+          raw = true;
+          continue;
+        }
+        if (arg === "--json") {
+          json = true;
+          continue;
+        }
+        if (arg === "--help") {
+          console.error("Usage: zmail thread <thread_id> [--json] [--raw]");
+          console.error("  --json    output JSON (default: text)");
+          console.error("  --raw     include raw .eml content");
+          process.exit(0);
+        }
+        if (arg.startsWith("-")) {
+          throw new Error(`Unknown flag: ${arg}`);
+        }
+        if (threadId) {
+          throw new Error("Too many positional arguments.");
+        }
+        threadId = arg;
+      }
+
+      if (!threadId) {
+        throw new Error("Usage: zmail thread <thread_id> [--json] [--raw]");
       }
 
       const db = getDb();
-      const threadId = normalizeMessageId(parsed.id);
+      const normalizedThreadId = normalizeMessageId(threadId);
       const messages = db
         .prepare("SELECT * FROM messages WHERE thread_id = ? ORDER BY date ASC")
-        .all(threadId) as MessageRow[];
-      const shaped = await Promise.all(messages.map((m) => formatMessageForOutput(m, parsed.raw)));
-      console.log(JSON.stringify(shaped, null, 2));
+        .all(normalizedThreadId) as MessageRow[];
+
+      if (json) {
+        const shaped = await Promise.all(messages.map((m) => formatMessageForOutput(m, raw)));
+        console.log(JSON.stringify(shaped, null, 2));
+      } else {
+        // Text format: format each message with formatMessageLlmFriendly
+        const total = messages.length;
+        for (let i = 0; i < messages.length; i++) {
+          const message = messages[i];
+          const shaped = await formatMessageForOutput(message, raw);
+          if (total > 1) {
+            console.log(`=== Message ${i + 1} of ${total} ===`);
+          }
+          console.log(formatMessageLlmFriendly(message, shaped));
+          if (i < messages.length - 1) {
+            console.log("");
+          }
+        }
+      }
       break;
     }
 
@@ -879,14 +1099,8 @@ async function main() {
       const syncDone = new Promise<void>((resolve) => { resolveSyncDone = resolve; });
 
       // Refresh always goes forward (fetches new messages since last sync)
-      const syncOptions: { direction: 'forward'; onLogPath?: (logPath: string) => void } = {
+      const syncOptions: { direction: 'forward' } = {
         direction: 'forward',
-      };
-      
-      // Print log path immediately when sync starts (useful for background execution)
-      // Note: sync/index.ts already prints this synchronously, but we keep the callback for API consistency
-      syncOptions.onLogPath = (_logPath: string) => {
-        // Already printed by sync/index.ts
       };
 
       const syncPromise = runSync(syncOptions).then((result) => {
@@ -898,7 +1112,7 @@ async function main() {
       // Wait for both to complete
       const [syncResult, indexResult] = await Promise.all([syncPromise, indexPromise]);
 
-      // Log path already printed at start via onLogPath callback
+      // Sync complete
       if (syncResult) {
         const sec = (syncResult.durationMs / 1000).toFixed(2);
         const mb = (syncResult.bytesDownloaded / (1024 * 1024)).toFixed(2);
@@ -928,79 +1142,59 @@ async function main() {
 
     case "status": {
       const showImapStatus = args.includes("--imap") || args.includes("--server");
+      const outputJson = args.includes("--json");
       
       const db = getDb();
-      const status = getStatus(db);
-
-      // Sync status
-      if (status.sync.isRunning) {
-        console.log(`Sync:      running`);
-      } else if (status.sync.lastSyncAt) {
-        console.log(`Sync:      idle (last: ${status.sync.lastSyncAt.slice(0, 10)}, ${status.sync.totalMessages} messages)`);
-      } else {
-        console.log(`Sync:      never run`);
-      }
-
-      // Indexing status
-      if (status.indexing.isRunning) {
-        // SQLite datetime('now') is UTC but has no 'Z'; parse as UTC to avoid negative elapsed (local-time parse)
-        const startedMs = status.indexing.startedAt
-          ? (status.indexing.startedAt.includes("Z") || status.indexing.startedAt.includes("+")
-              ? new Date(status.indexing.startedAt).getTime()
-              : new Date(status.indexing.startedAt.replace(" ", "T") + "Z").getTime())
-          : 0;
-        const elapsed = startedMs ? Math.round((Date.now() - startedMs) / 1000) : 0;
-        // total_to_index can be 0 when sync+index start together (pending was 0 at start); use live total for display
-        const displayTotal = Math.max(status.indexing.totalToIndex, status.indexing.indexedSoFar + status.indexing.pending);
-        console.log(`Indexing:  running (${status.indexing.indexedSoFar}/${displayTotal} indexed${status.indexing.totalFailed > 0 ? `, ${status.indexing.totalFailed} failed` : ''}, ${elapsed}s elapsed)`);
-      } else if (status.indexing.completedAt) {
-        console.log(`Indexing:  idle (last: ${status.indexing.completedAt.slice(0, 10)}, ${status.indexing.totalIndexed} indexed${status.indexing.totalFailed > 0 ? `, ${status.indexing.totalFailed} failed` : ''})`);
-      } else {
-        console.log(`Indexing:  never run`);
-      }
-
-      // Search readiness
-      console.log(`Search:    FTS ready (${status.search.ftsReady}) | Semantic ready (${status.search.semanticReady})`);
-
-      // Date range
-      if (status.dateRange) {
-        const earliest = status.dateRange.earliest.slice(0, 10);
-        const latest = status.dateRange.latest.slice(0, 10);
-        console.log(`Range:     ${earliest} .. ${latest}`);
-      }
-
-      // Compare with server using STATUS (only if flag is provided)
-      if (showImapStatus) {
-        const imapComparison = await getImapServerStatus(db);
-        if (imapComparison) {
-          console.log("");
-          console.log("Server comparison:");
-          console.log(`  Server:   ${imapComparison.server.messages} messages, UIDNEXT=${imapComparison.server.uidNext ?? 'unknown'}, UIDVALIDITY=${imapComparison.server.uidValidity ?? 'unknown'}`);
-          console.log(`  Local:    ${imapComparison.local.messages} messages, last_uid=${imapComparison.local.lastUid ?? 'none'}, UIDVALIDITY=${imapComparison.local.uidValidity ?? 'none'}`);
-          
-          if (imapComparison.missing !== null && imapComparison.missing > 0 && imapComparison.missingUidRange) {
-            console.log(`  Missing:  ${imapComparison.missing} new message(s) (UIDs ${imapComparison.missingUidRange.start}..${imapComparison.missingUidRange.end})`);
-          } else if (imapComparison.missing === 0) {
-            console.log(`  Status:   Up to date (no new messages)`);
-          }
-          
-          if (imapComparison.uidValidityMismatch) {
-            console.log(`  Warning:  UIDVALIDITY mismatch - mailbox may have been reset`);
-          }
-          
-          if (imapComparison.coverage) {
-            console.log(`  Coverage: Goes back ${imapComparison.coverage.daysAgo} days (${imapComparison.coverage.yearsAgo} years) to ${imapComparison.coverage.earliestDate}`);
+      
+      if (outputJson) {
+        const status = getStatus(db);
+        const output: Record<string, unknown> = { ...status };
+        
+        if (showImapStatus) {
+          const imapComparison = await getImapServerStatus(db);
+          if (imapComparison) {
+            output.imap = imapComparison;
           }
         }
+        
+        console.log(JSON.stringify(output, null, 2));
       } else {
-        console.log("");
-        console.log("Hint: Add --imap flag to show IMAP server status (may take 10+ seconds longer)");
+        printStatus(db);
+
+        // Compare with server using STATUS (only if flag is provided)
+        if (showImapStatus) {
+          const imapComparison = await getImapServerStatus(db);
+          if (imapComparison) {
+            console.log("");
+            console.log("Server comparison:");
+            console.log(`  Server:   ${imapComparison.server.messages} messages, UIDNEXT=${imapComparison.server.uidNext ?? 'unknown'}, UIDVALIDITY=${imapComparison.server.uidValidity ?? 'unknown'}`);
+            console.log(`  Local:    ${imapComparison.local.messages} messages, last_uid=${imapComparison.local.lastUid ?? 'none'}, UIDVALIDITY=${imapComparison.local.uidValidity ?? 'none'}`);
+            
+            if (imapComparison.missing !== null && imapComparison.missing > 0 && imapComparison.missingUidRange) {
+              console.log(`  Missing:  ${imapComparison.missing} new message(s) (UIDs ${imapComparison.missingUidRange.start}..${imapComparison.missingUidRange.end})`);
+            } else if (imapComparison.missing === 0) {
+              console.log(`  Status:   Up to date (no new messages)`);
+            }
+            
+            if (imapComparison.uidValidityMismatch) {
+              console.log(`  Warning:  UIDVALIDITY mismatch - mailbox may have been reset`);
+            }
+            
+            if (imapComparison.coverage) {
+              console.log(`  Coverage: Goes back ${imapComparison.coverage.daysAgo} days (${imapComparison.coverage.yearsAgo} years) to ${imapComparison.coverage.earliestDate}`);
+            }
+          }
+        } else {
+          console.log("");
+          console.log("Hint: Add --imap flag to show IMAP server status (may take 10+ seconds longer)");
+        }
       }
       
       break;
     }
 
     case "stats": {
+      const outputJson = args.includes("--json");
       const db = getDb();
       const total = db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number };
       const dateRange = db.prepare("SELECT MIN(date) as earliest, MAX(date) as latest FROM messages").get() as
@@ -1015,18 +1209,44 @@ async function main() {
         .prepare("SELECT folder, COUNT(*) as count FROM messages GROUP BY folder ORDER BY count DESC")
         .all() as Array<{ folder: string; count: number }>;
 
-      console.log("Database Statistics\n");
-      console.log(`Total messages: ${total.count}`);
-      if (dateRange?.earliest && dateRange?.latest) {
-        console.log(`Date range: ${dateRange.earliest.slice(0, 10)} to ${dateRange.latest.slice(0, 10)}`);
-      }
-      console.log("\nTop senders:");
-      for (const sender of topSenders) {
-        console.log(`  ${sender.from_address.padEnd(40)} ${sender.count}`);
-      }
-      console.log("\nMessages by folder:");
-      for (const folder of folderBreakdown) {
-        console.log(`  ${folder.folder.padEnd(40)} ${folder.count}`);
+      if (outputJson) {
+        console.log(
+          JSON.stringify(
+            {
+              totalMessages: total.count,
+              dateRange: dateRange?.earliest && dateRange?.latest
+                ? {
+                    earliest: dateRange.earliest.slice(0, 10),
+                    latest: dateRange.latest.slice(0, 10),
+                  }
+                : null,
+              topSenders: topSenders.map((s) => ({
+                address: s.from_address,
+                count: s.count,
+              })),
+              folders: folderBreakdown.map((f) => ({
+                folder: f.folder,
+                count: f.count,
+              })),
+            },
+            null,
+            2
+          )
+        );
+      } else {
+        console.log("Database Statistics\n");
+        console.log(`Total messages: ${total.count}`);
+        if (dateRange?.earliest && dateRange?.latest) {
+          console.log(`Date range: ${dateRange.earliest.slice(0, 10)} to ${dateRange.latest.slice(0, 10)}`);
+        }
+        console.log("\nTop senders:");
+        for (const sender of topSenders) {
+          console.log(`  ${sender.from_address.padEnd(40)} ${sender.count}`);
+        }
+        console.log("\nMessages by folder:");
+        for (const folder of folderBreakdown) {
+          console.log(`  ${folder.folder.padEnd(40)} ${folder.count}`);
+        }
       }
       break;
     }
@@ -1063,8 +1283,7 @@ async function main() {
           extracted_text: string | null;
         }>;
 
-        const isTty = process.stdout.isTTY;
-        const shouldOutputJson = !isTty || args.includes("--json");
+        const shouldOutputJson = !args.includes("--text");
 
         const quotedMsgId = messageId.includes(" ") ? `"${messageId}"` : messageId;
         if (shouldOutputJson) {
@@ -1199,13 +1418,13 @@ Usage:
   zmail status                     Show sync and indexing status
   zmail stats                      Show database statistics
   zmail read <id> [--raw]          Read a message (or: zmail message <id>)
-  zmail thread <id> [--raw]        Fetch thread (Markdown by default; raw .eml with --raw)
+  zmail thread <id> [--json]      Fetch thread (text by default; --json for structured output)
   zmail attachment list <message_id>   List attachments (use message_id from search)
   zmail attachment read <message_id> <index>|<filename>   Read by index (1-based) or filename
   zmail mcp                        Start MCP server (stdio)
 
 Agent interfaces:
-  CLI (this): Use for direct subprocess calls. Fast for one-off queries, returns JSON with --json flag.
+  CLI (this): Use for direct subprocess calls. Fast for one-off queries. Commands default to JSON (search, who, attachment list) or text (read, thread, status, stats). Use --text or --json flags to override.
   MCP: Use for persistent tool-based integration. Run 'zmail mcp' to start stdio server. See docs/MCP.md.
 
 Run 'zmail setup' for setup instructions.

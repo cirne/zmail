@@ -104,10 +104,16 @@ Supported formats: PDF, DOCX, XLSX, HTML, CSV, TXT. Extraction happens on first 
 **CLI help and onboarding (no env required):** `zmail --help`, `zmail -h`, `zmail help` show usage. If any command fails due to missing config, the CLI prints "No config found. Run 'zmail setup' or 'zmail wizard' first."
 
 **Setup (CLI/agent-first):** Provide credentials via flags or env vars. For interactive prompts, use `zmail wizard`.
+
+**Required credentials:**
+1. Email address (e.g., `user@gmail.com`) — provided via `--email` flag or `ZMAIL_EMAIL` environment variable
+2. IMAP app password (Gmail app password) — provided via `--password` flag or `ZMAIL_IMAP_PASSWORD` environment variable
+3. OpenAI API key (optional, for semantic search) — provided via `--openai-key` flag or `ZMAIL_OPENAI_API_KEY` (or `OPENAI_API_KEY`) environment variable
+
 ```bash
 zmail setup --email user@gmail.com --password "app-password" --openai-key "sk-..." [--no-validate]
 # Or via environment variables:
-ZMAIL_EMAIL=... ZMAIL_IMAP_PASSWORD=... ZMAIL_OPENAI_API_KEY=... zmail setup
+ZMAIL_EMAIL=user@gmail.com ZMAIL_IMAP_PASSWORD="app-password" ZMAIL_OPENAI_API_KEY="sk-..." zmail setup
 ```
 
 ## Agent interfaces: CLI vs MCP
@@ -117,7 +123,7 @@ zmail provides two interfaces for agents, both accessing the same SQLite index:
 **CLI (command-line):**
 - Use for direct subprocess calls from agents
 - Fast for one-off queries (no persistent connection overhead)
-- Returns structured JSON with `--json` flag
+- Commands default to JSON (search, who, attachment list) or text (read, thread, status, stats). Use `--text` or `--json` flags to override.
 - Best for: one-time searches, status checks, simple workflows
 
 **MCP (Model Context Protocol):**
@@ -150,7 +156,10 @@ Optional environment variables:
 
 - `ZMAIL_HOME` — override config directory (default: `~/.zmail`)
 
-Required environment variables:
+Required environment variables (for `zmail setup`):
 
-- `ZMAIL_IMAP_PASSWORD` — IMAP password
-- `ZMAIL_OPENAI_API_KEY` (or `OPENAI_API_KEY`) — OpenAI API key
+- `ZMAIL_EMAIL` — Email address (e.g., `user@gmail.com`)
+- `ZMAIL_IMAP_PASSWORD` — IMAP app password (Gmail app password, not regular password)
+- `ZMAIL_OPENAI_API_KEY` (or `OPENAI_API_KEY`) — OpenAI API key for semantic search
+
+**Note:** The correct environment variable names are `ZMAIL_EMAIL` and `ZMAIL_IMAP_PASSWORD`. Do not use `IMAP_USER` or `IMAP_PASSWORD` — these are outdated and not supported.

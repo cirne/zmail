@@ -16,6 +16,8 @@ export interface StatusData {
     totalMessages: number;
     earliestSyncedDate: string | null;
     latestSyncedDate: string | null;
+    targetStartDate: string | null;
+    syncStartEarliestDate: string | null;
   };
   indexing: {
     isRunning: boolean;
@@ -65,6 +67,8 @@ export function getStatus(db: SqliteDatabase = getDb()): StatusData {
   const syncStatus = db.prepare("SELECT * FROM sync_summary WHERE id = 1").get() as {
     earliest_synced_date: string | null;
     latest_synced_date: string | null;
+    target_start_date: string | null;
+    sync_start_earliest_date: string | null;
     total_messages: number;
     last_sync_at: string | null;
     is_running: number;
@@ -96,6 +100,8 @@ export function getStatus(db: SqliteDatabase = getDb()): StatusData {
         totalMessages: syncStatus.total_messages,
         earliestSyncedDate: syncStatus.earliest_synced_date,
         latestSyncedDate: syncStatus.latest_synced_date,
+        targetStartDate: syncStatus.target_start_date ?? null,
+        syncStartEarliestDate: syncStatus.sync_start_earliest_date ?? null,
       }
     : {
         isRunning: false,
@@ -103,6 +109,8 @@ export function getStatus(db: SqliteDatabase = getDb()): StatusData {
         totalMessages: 0,
         earliestSyncedDate: null,
         latestSyncedDate: null,
+        targetStartDate: null,
+        syncStartEarliestDate: null,
       };
 
   const indexing = indexStatus

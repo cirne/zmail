@@ -3,6 +3,8 @@
 This document tracks concrete architectural decisions made during design and development.
 See [VISION.md](./VISION.md) for the product vision and goals.
 
+**Why one file:** ADRs cross-reference each other heavily (e.g. ADR-016 → ADR-017 → ADR-020) and an agent making an architectural decision benefits from scanning the full decision log for context and shape, not just one answer. Keeping everything here also means grep and semantic search find everything without following links. If this file grows unwieldy (say, past ADR-030), split into individual files under `docs/adr/` with an index table here — same pattern as [OPPORTUNITIES.md](./OPPORTUNITIES.md).
+
 ---
 
 ## Decision Log
@@ -96,7 +98,7 @@ zmail who <query> [flags]        ← find people by address or display name (sen
 zmail status [--imap]           ← sync/indexing/search readiness (--imap for IMAP server comparison)
 zmail stats                     ← DB stats (volume + top senders/folders)
 zmail read <id> [--raw]         ← read a message (or: zmail message <id>)
-zmail thread <id> [--raw]       ← fetch full thread JSON
+zmail thread <id> [--json]      ← fetch full thread (text by default; --json for structured output)
 zmail mcp                       ← start MCP server (stdio)
 ```
 
@@ -104,7 +106,7 @@ zmail mcp                       ← start MCP server (stdio)
 - **`zmail sync`** (backward): Initial setup and backfill. Resumes from oldest synced date, fills gaps going backward. Uses date-based search with UID filtering to skip already-synced messages.
 - **`zmail refresh`** (forward): Frequent updates. Uses UID range search (`UID ${last_uid + 1}:*`) to fetch only new messages. Much faster than date-based search for incremental updates.
 
-**Rationale:** Agents like Claude Code and OpenClaw can invoke shell commands directly. A subprocess call to `zmail search` is faster than an MCP HTTP round-trip, requires no running server, and has no port management. The CLI returns structured JSON so agents can consume output directly.
+**Rationale:** Agents like Claude Code and OpenClaw can invoke shell commands directly. A subprocess call to `zmail search` is faster than an MCP HTTP round-trip, requires no running server, and has no port management. The CLI defaults to JSON for structured commands (`search`, `who`, `attachment list`) so agents can consume output directly. See [ADR-022](#adr-022-cli-output-format--json-default-for-structured-commands-text-for-progressivecontent-commands) for output format decisions.
 
 MCP remains the right interface for remote/hosted deployments where the index lives on a server the agent can't shell into.
 
@@ -488,6 +490,51 @@ This replaces timestamp-based staleness detection. PID checks are instantaneous 
 **Rationale:** This project intentionally avoids in-app migrations for existing DBs. `CREATE TABLE IF NOT EXISTS` keeps fresh bootstraps simple but does not mutate older tables. Drift detection prevents opaque runtime SQLite errors (for example missing `messages.embedding_state`) and gives a deterministic recovery path.
 
 **Result:** Fresh environments bootstrap directly from source schema, while stale local DBs fail fast with actionable rebuild instructions instead of partial runtime failures.
+
+---
+
+---
+
+### ADR-022: CLI Output Format — JSON Default for Structured Commands, Text for Progressive/Content Commands
+
+**Decision:** CLI output format is determined per-command based on whether the output is structured data, progressive status, or raw content — not by TTY detection.
+
+**Format matrix:**
+
+| Command | JSON | Text | Default | Notes |
+|---|---|---|---|---|
+| `search` | yes (`--json`) | yes (`--text`) | **JSON** | Structured results; agent primary workflow |
+| `who` | yes (`--json`) | yes (`--text`) | **JSON** | Structured people records |
+| `attachment list` | yes (`--json`) | yes (`--text`) | **JSON** | Structured list with IDs agents need to follow up |
+| `status` | yes (`--json`) | yes (default) | **text** | Human-readable status lines; agents parse text fine |
+| `stats` | yes (`--json`) | yes (default) | **text** | Summary stats; no iteration needed |
+| `read` / `message` | no | yes (default) | **text** | Body IS the content; wrapping markdown in JSON adds noise |
+| `thread` | no | yes (default) | **text** | Same as `read` — multi-message view; was previously always JSON (changed) |
+| `sync` | no | yes (default) | **text** | Progressive output as sync runs; JSON would be worse |
+| `refresh` | no | yes (default) | **text** | Same as `sync` |
+| `attachment read` | no | yes (default) | **text** | Raw content / extracted text; wrapping in JSON is clumsy |
+| `mcp` | n/a | n/a | n/a | stdio protocol |
+
+**Key principles driving these decisions:**
+
+1. **Machine-parsable by default** for commands whose output agents need to consume structurally (search results, people records, attachment lists). JSON is the format.
+2. **Token-efficient** — JSON is not imposed where it adds wrapper noise without value (e.g. a markdown email body inside a JSON string field).
+3. **Self-documenting** — hints and guidance remain in output (in the JSON payload for JSON commands; in stdout for text commands) so agents learn as they go.
+4. **No TTY detection** for format switching. TTY detection is fragile and creates inconsistency between interactive and scripted use. Format defaults are fixed per command; users/agents opt out with `--text` or `--json`.
+
+**Flag naming — `--text` not `--table`:**
+
+The override flag is `--text` (not `--table`) because several text-format commands (`status`, `sync`) don't produce tables — they produce status lines. `--text` is the general term for human-readable non-JSON output.
+
+**`thread` change — text by default:**
+
+`thread` was previously hardcoded to always output JSON. This is changed to match `read`/`message`: text by default. The body content of emails is the value, and wrapping markdown bodies in JSON strings offers no agent benefit over a readable multi-message text view. If an agent needs to iterate over message IDs from a thread, it can use `search` with a thread filter.
+
+**`status` and `stats` — text default with `--json` opt-in:**
+
+Agents today parse the text output of `status` without difficulty. Text stays the default. `--json` is added as an opt-in for automated status checks (e.g. "is sync done?" polling).
+
+**Rationale:** zmail is agent-first (ADR-005). The primary consumers are agents (Claude Code, Cursor, etc.) running CLI commands as subprocesses. Agents need structured output for search results and lists they'll iterate or pass downstream — JSON is correct there. For content retrieval (`read`, `thread`, `attachment read`) and progress reporting (`sync`, `refresh`, `status`), text is not a barrier to agent use and avoids JSON encoding overhead on large content.
 
 ---
 

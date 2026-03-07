@@ -7,7 +7,7 @@ import { getDb } from "~/db";
 import { acquireLock, releaseLock } from "~/lib/process-lock";
 import { parseRawMessage } from "./parse-message";
 import { parseSinceToDate } from "./parse-since";
-import { createFileLogger, generateSyncLogFilename, type FileLogger } from "~/lib/file-logger";
+import { createFileLogger, SYNC_LOG_PATH, type FileLogger } from "~/lib/file-logger";
 import { withTimer } from "~/lib/timer";
 
 /** Mailbox to sync: All Mail for Gmail (per ADR-011), INBOX for others. */
@@ -20,8 +20,6 @@ export interface SyncOptions {
   since?: string;
   /** Sync direction: 'forward' (newest first, for updates) or 'backward' (oldest first, for backfill). Default: 'forward' */
   direction?: 'forward' | 'backward';
-  /** Optional callback invoked immediately when log file is created, before sync starts */
-  onLogPath?: (logPath: string) => void;
 }
 
 export interface SyncResult {
@@ -98,17 +96,14 @@ function logSyncMetrics(fileLogger: FileLogger, r: SyncResult): void {
 export async function runSync(options?: SyncOptions): Promise<SyncResult> {
   const startTime = Date.now();
   
-  // Create file logger for this sync run
-  const logFilename = generateSyncLogFilename();
-  const fileLogger = createFileLogger(logFilename);
+  // Create file logger for sync (fixed log path, append mode)
+  // Extract just the filename from the fixed path for createFileLogger
+  const syncLogFilename = "sync";
+  const fileLogger = createFileLogger(syncLogFilename);
   
-  // Notify caller of log path immediately (useful for background execution)
-  // Print synchronously to stdout so it appears even when run in background
-  if (options?.onLogPath) {
-    // Use process.stdout.write with sync flag to ensure immediate output
-    process.stdout.write(`Sync log: ${fileLogger.logPath}\n`);
-    options.onLogPath(fileLogger.logPath);
-  }
+  // Write run separator as the VERY FIRST thing (before any checks, config, etc.)
+  // This ensures even early exits (lock contention, config errors) are clearly delineated
+  fileLogger.writeSeparator(process.pid);
   
   // Phase timing instrumentation
   const phaseTimings: Record<string, number> = {};
@@ -129,6 +124,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
   
   const imap = requireImapConfig();
   if (!imap.user || !imap.password) {
+    fileLogger.info("Config error: imap.user and imap.password required");
     fileLogger.close();
     throw new Error("imap.user and imap.password are required for sync. Run 'zmail setup' or set in ~/.zmail/config.json and .env");
   }
@@ -139,13 +135,22 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
 
   // Pre-check: if sync is already running, skip connect entirely
   const db = getDb();
-  const syncRunningCheck = db.prepare("SELECT is_running FROM sync_summary WHERE id = 1").get() as
-    | { is_running: number }
+  
+  // Store target start date and capture current earliest date for progress tracking
+  // This ensures we only count NEW emails synced in this run, not pre-existing ones
+  const currentEarliest = db.prepare("SELECT earliest_synced_date FROM sync_summary WHERE id = 1").get() as
+    | { earliest_synced_date: string | null }
+    | undefined;
+  db.prepare(
+    "UPDATE sync_summary SET target_start_date = ?, sync_start_earliest_date = ? WHERE id = 1"
+  ).run(fromDate, currentEarliest?.earliest_synced_date ?? null);
+  const syncRunningCheck = db.prepare("SELECT is_running, owner_pid FROM sync_summary WHERE id = 1").get() as
+    | { is_running: number; owner_pid: number | null }
     | undefined;
   const isRunning = syncRunningCheck?.is_running === 1;
   
   if (isRunning) {
-    fileLogger.info("Sync already running, exiting");
+    fileLogger.info("Sync already running, exiting", { ownerPid: syncRunningCheck.owner_pid });
     const durationMs = Date.now() - startTime;
     phaseMs("runSync_exit_early");
     fileLogger.close();
@@ -156,7 +161,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
       durationMs,
       bandwidthBytesPerSec: 0,
       messagesPerMinute: 0,
-      logPath: fileLogger.logPath,
+      logPath: SYNC_LOG_PATH,
     };
   }
 
@@ -203,7 +208,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
       durationMs,
       bandwidthBytesPerSec: 0,
       messagesPerMinute: 0,
-      logPath: fileLogger.logPath,
+      logPath: SYNC_LOG_PATH,
     };
   }
   if (lockResult.takenOver) {
@@ -309,7 +314,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
             durationMs,
             bandwidthBytesPerSec: 0,
             messagesPerMinute: 0,
-            logPath: fileLogger.logPath,
+            logPath: SYNC_LOG_PATH,
           };
           logSyncMetrics(fileLogger, result);
           // Emit phase summary
@@ -531,7 +536,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
           durationMs,
           bandwidthBytesPerSec: 0,
           messagesPerMinute: 0,
-          logPath: fileLogger.logPath,
+          logPath: SYNC_LOG_PATH,
         };
         logSyncMetrics(fileLogger, result);
         // Emit phase summary
@@ -804,7 +809,7 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
         durationMs,
         bandwidthBytesPerSec: durationSec > 0 ? bytesDownloaded / durationSec : 0,
         messagesPerMinute: durationSec > 0 ? (messagesFetched / durationSec) * 60 : 0,
-        logPath: fileLogger.logPath,
+        logPath: SYNC_LOG_PATH,
       };
       logSyncMetrics(fileLogger, result);
       

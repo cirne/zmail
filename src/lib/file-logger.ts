@@ -20,8 +20,14 @@ export interface FileLogger {
   info: (msg: string, data?: Record<string, unknown>) => void;
   warn: (msg: string, data?: Record<string, unknown>) => void;
   error: (msg: string, data?: Record<string, unknown>) => void;
+  writeSeparator: (pid: number) => void;
   close: () => void;
 }
+
+/**
+ * Fixed path for sync log file (all sync runs append to this file)
+ */
+export const SYNC_LOG_PATH = join(ZMAIL_HOME, "logs", "sync.log");
 
 /**
  * Create a file logger that writes to {ZMAIL_HOME}/logs/{filename}.log
@@ -53,6 +59,10 @@ export function createFileLogger(filename: string): FileLogger {
     info: (msg: string, data?: Record<string, unknown>) => write("info", msg, data),
     warn: (msg: string, data?: Record<string, unknown>) => write("warn", msg, data),
     error: (msg: string, data?: Record<string, unknown>) => write("error", msg, data),
+    writeSeparator: (pid: number) => {
+      const ts = new Date().toISOString();
+      stream.write(`===== SYNC RUN ${ts} (PID ${pid}) =====\n`);
+    },
     close: () => {
       // Ensure all pending writes are flushed before closing
       stream.end(() => {
@@ -64,6 +74,7 @@ export function createFileLogger(filename: string): FileLogger {
 
 /**
  * Generate a sync log filename with date and time: sync-YYYYMMDD-HHMMSS (UTC)
+ * @deprecated Use SYNC_LOG_PATH constant instead. Kept for backward compatibility.
  */
 export function generateSyncLogFilename(): string {
   const now = new Date();

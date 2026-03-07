@@ -64,25 +64,18 @@ if (command === "wizard") {
   process.exit(0);
 }
 
-// If no command provided, check for config first
+// If no command provided, show quick help
 if (!command) {
-  if (!hasConfig()) {
-    console.log(CLI_USAGE);
-    console.error("\nNo config found. Run 'zmail setup' or 'zmail wizard' first.");
-    process.exit(1);
-  }
-  // Config exists, start sync
-  try {
-    const { runSync } = await import("~/sync");
-    const { logger } = await import("~/lib/logger");
-    logger.info("Starting zmail sync");
-    runSync().catch((err) => {
-      logger.error("Sync daemon crashed", { error: String(err) });
-    });
-  } catch (err) {
-    handleMissingConfig(err);
-  }
-  // Don't exit here - sync runs in background
+  console.log("zmail — agent-first email: sync, index, and search your inbox.\n");
+  console.log("  zmail sync              Start syncing email (background; waits until data flows)");
+  console.log("  zmail refresh           Fetch new email since last sync (fast, foreground)");
+  console.log("  zmail search <query>    Search email — hybrid semantic+keyword by default");
+  console.log("  zmail who <query>       Find people by name or address");
+  console.log("  zmail status            Show sync and indexing progress");
+  console.log("  zmail read <id>         Read a message");
+  console.log("");
+  console.log("Run 'zmail --help' for all commands and flags.");
+  process.exit(0);
 } else {
   // Command provided, check for config before proceeding
   if (!hasConfig()) {

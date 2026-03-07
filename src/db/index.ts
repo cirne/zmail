@@ -115,6 +115,19 @@ export function getDb(): SqliteDatabase {
 
   _db.exec(SCHEMA);
 
+  // Migrate: add new columns to sync_summary if they don't exist
+  for (const column of ["target_start_date", "sync_start_earliest_date"]) {
+    try {
+      _db.exec(`ALTER TABLE sync_summary ADD COLUMN ${column} TEXT`);
+    } catch (err) {
+      // Column already exists, ignore (SQLite error: "duplicate column name: ...")
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.toLowerCase().includes("duplicate column")) {
+        throw err;
+      }
+    }
+  }
+
   // Ensure singleton status rows exist
   _db.exec(
     "INSERT OR IGNORE INTO sync_summary (id, total_messages) VALUES (1, 0)"

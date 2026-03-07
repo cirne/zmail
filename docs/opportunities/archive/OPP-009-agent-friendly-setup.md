@@ -82,7 +82,7 @@ ZMAIL_EMAIL=user@gmail.com ZMAIL_IMAP_PASSWORD="..." ZMAIL_OPENAI_API_KEY="sk-..
 
 ### Phase 1: Non-interactive `zmail setup`
 
-1. **Update `src/lib/config.ts`** — Support `ZMAIL_EMAIL` environment variable (in addition to existing `IMAP_USER` support)
+1. **Update `src/lib/config.ts`** — Support `ZMAIL_EMAIL` environment variable (replaces old `IMAP_USER` naming)
 
 2. **Refactor `src/cli/setup.ts`** — Split into:
    - `runSetup()` — Non-interactive setup function that accepts options and never prompts

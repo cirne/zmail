@@ -69,6 +69,8 @@ export const SCHEMA = /* sql */ `
     id                   INTEGER PRIMARY KEY CHECK (id = 1),
     earliest_synced_date TEXT,
     latest_synced_date   TEXT,
+    target_start_date    TEXT,
+    sync_start_earliest_date TEXT,
     total_messages       INTEGER NOT NULL DEFAULT 0,
     last_sync_at         TEXT,
     is_running           INTEGER NOT NULL DEFAULT 0,
