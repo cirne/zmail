@@ -1,6 +1,6 @@
 # BUG-004: Attachment Read Silent Failure — Agent-Reported
 
-**Status:** Open.
+**Status:** Fixed (Verified 2026-03-07).
 
 **Design lens:** [Agent-first](../VISION.md) — silent failures are especially harmful for LLM agents; without an error message, the agent cannot self-correct or understand what went wrong.
 
@@ -49,6 +49,15 @@ Use the filename instead of the index:
 ```bash
 zmail attachment read "<message-id>" "filename.xlsx"
 ```
+
+---
+
+## Verification
+
+- **Status:** Verified
+- **Date:** 2026-03-07
+- **Result:** Fix confirmed. Index 0 now returns a clear error: `No attachment "0" in this message. Use index 1-1 or exact filename.` Index 1 correctly reads the attachment. The error message clearly indicates 1-based indexing and the valid range.
+- **Tested with:** `zmail attachment read "<CH3PR84MB38746104F19C2113B72E38DBFD7AA@CH3PR84MB3874.NAMPRD84.PROD.OUTLOOK.COM>" 0` and `zmail attachment read "..." 1`
 
 ---
 

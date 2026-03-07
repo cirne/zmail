@@ -9,7 +9,7 @@ import { logger } from "~/lib/logger";
 import { parseSinceToDate } from "~/sync/parse-since";
 import { htmlToMarkdown } from "~/lib/content-normalize";
 import { parseRawMessage } from "~/sync/parse-message";
-import type { SearchResult } from "~/lib/types";
+import type { SearchResult, WhoResult } from "~/lib/types";
 import type { SqliteDatabase } from "~/db";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -148,6 +148,8 @@ interface ParsedWhoArgs {
   limit?: number;
   minSent?: number;
   minReceived?: number;
+  includeNoreply?: boolean;
+  dynamic?: boolean; // Kept for backward compatibility / testing, but dynamic is now default
   forceText: boolean;
 }
 
@@ -157,6 +159,9 @@ function whoUsage() {
   console.error("  --limit <n>        max results (default: 50)");
   console.error("  --min-sent <n>     minimum sent count");
   console.error("  --min-received <n> minimum received count");
+  console.error("  --all              include noreply/bot addresses");
+  console.error("");
+  console.error("Note: Profiles are built dynamically from messages (always up-to-date)");
 }
 
 function parseWhoArgs(rawArgs: string[]): ParsedWhoArgs {
@@ -184,6 +189,14 @@ function parseWhoArgs(rawArgs: string[]): ParsedWhoArgs {
     }
     if (arg === "--text") {
       parsed.forceText = true;
+      continue;
+    }
+    if (arg === "--all") {
+      parsed.includeNoreply = true;
+      continue;
+    }
+    if (arg === "--dynamic") {
+      parsed.dynamic = true;
       continue;
     }
     if (arg === "--limit") {
@@ -856,18 +869,32 @@ async function main() {
       const startTime = Date.now();
       let exitReason: 'data' | 'done' | 'timeout' = 'timeout';
       const imapHost = config.imap.host;
+      let nonTtyPrintedConnecting = false;
+      let nonTtyPrintedProgress = false;
 
       while (Date.now() - startTime < MAX_WAIT_MS) {
         await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
         const { count } = db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number };
         const elapsed = Math.round((Date.now() - startTime) / 1000);
-        
-        if (count === 0) {
-          // Still connecting - show IMAP hostname
-          process.stdout.write(`\rConnecting to IMAP server at ${imapHost}...`);
+
+        if (process.stdout.isTTY) {
+          if (count === 0) {
+            process.stdout.write(`\rConnecting to IMAP server at ${imapHost}...`);
+          } else {
+            process.stdout.write(`\rWaiting for email... ${count} synced (${elapsed}s)`);
+          }
         } else {
-          // Emails are flowing - show progress
-          process.stdout.write(`\rWaiting for email... ${count} synced (${elapsed}s)`);
+          if (count === 0) {
+            if (!nonTtyPrintedConnecting) {
+              process.stdout.write(`Connecting to IMAP server at ${imapHost}...`);
+              nonTtyPrintedConnecting = true;
+            }
+          } else {
+            if (!nonTtyPrintedProgress) {
+              process.stdout.write(`Waiting for email... ${count} synced (${elapsed}s)`);
+              nonTtyPrintedProgress = true;
+            }
+          }
         }
 
         if (count >= TARGET_COUNT) {
@@ -1041,13 +1068,25 @@ async function main() {
 
       const db = getDb();
       const ownerAddress = config.imap.user?.trim() || undefined;
+
+      const startTime = Date.now();
       const result = who(db, {
         query: whoParsed.query,
         limit: whoParsed.limit,
         minSent: whoParsed.minSent,
         minReceived: whoParsed.minReceived,
+        includeNoreply: whoParsed.includeNoreply,
         ownerAddress,
       });
+      const duration = Date.now() - startTime;
+
+      // Add timing info for performance monitoring
+      if (shouldOutputJson) {
+        (result as WhoResult & { _timing?: { ms: number } })._timing = { ms: duration };
+      } else if (whoParsed.dynamic) {
+        // Show timing in text mode if --dynamic flag was explicitly used (for testing)
+        console.log(`\n[Query took ${duration}ms]\n`);
+      }
 
       if (shouldOutputJson) {
         console.log(JSON.stringify(result, null, 2));
@@ -1060,12 +1099,32 @@ async function main() {
       }
 
       console.log(`People matching "${result.query}":\n`);
-      console.log("  ADDRESS".padEnd(44) + "  DISPLAY NAME".padEnd(24) + "  SENT   RECV   MENTIONED");
-      console.log("  " + "-".repeat(90));
       for (const p of result.people) {
-        const addr = p.address.length > 42 ? p.address.slice(0, 39) + "..." : p.address.padEnd(42);
-        const name = (p.displayName ?? "").length > 22 ? (p.displayName ?? "").slice(0, 19) + "..." : (p.displayName ?? "").padEnd(22);
-        console.log(`  ${addr}  ${name}  ${String(p.sentCount).padStart(5)}  ${String(p.receivedCount).padStart(5)}  ${String(p.mentionedCount).padStart(5)}`);
+        const name = p.name || "Unknown";
+        const akaStr = p.aka.length > 0 ? ` (aka: ${p.aka.join(", ")})` : "";
+        console.log(`  ${name}${akaStr}`);
+        console.log(`    Primary: ${p.primaryAddress}`);
+        if (p.addresses.length > 1) {
+          const otherAddrs = p.addresses.filter((a) => a !== p.primaryAddress);
+          console.log(`    Other addresses: ${otherAddrs.join(", ")}`);
+        }
+        if (p.phone) {
+          console.log(`    Phone: ${p.phone}`);
+        }
+        if (p.title || p.company) {
+          const titleCompany = [p.title, p.company].filter(Boolean).join(" at ");
+          console.log(`    ${titleCompany}`);
+        }
+        if (p.urls.length > 0) {
+          console.log(`    URLs: ${p.urls.join(", ")}`);
+        }
+        console.log(
+          `    Counts: ${p.sentCount} sent, ${p.receivedCount} received, ${p.mentionedCount} mentioned`
+        );
+        if (p.lastContact) {
+          console.log(`    Last contact: ${p.lastContact}`);
+        }
+        console.log("");
       }
       break;
     }
@@ -1321,7 +1380,7 @@ async function main() {
     case "attachments": {
       if (args.length === 0) {
         console.error("Usage: zmail attachment list <message_id>");
-        console.error("       zmail attachment read <message_id> <index_or_filename> [--raw]");
+        console.error("       zmail attachment read <message_id> <index_or_filename> [--raw] [--no-cache]");
         process.exit(1);
       }
 
@@ -1396,11 +1455,12 @@ async function main() {
         }
       } else if (subcommand === "read") {
         const raw = args.includes("--raw");
-        const readArgs = args.filter((a) => a !== "--raw");
+        const noCache = args.includes("--no-cache");
+        const readArgs = args.filter((a) => a !== "--raw" && a !== "--no-cache");
         const messageIdArg = readArgs[1];
         const indexOrFilename = readArgs[2];
         if (!messageIdArg || indexOrFilename === undefined) {
-          console.error("Usage: zmail attachment read <message_id> <index_or_filename> [--raw]");
+          console.error("Usage: zmail attachment read <message_id> <index_or_filename> [--raw] [--no-cache]");
           process.exit(1);
         }
 
@@ -1445,9 +1505,15 @@ async function main() {
             process.exit(1);
           }
         } else {
-          // Extract and output text
+          // Extract and output text (use --no-cache to force re-extraction and ignore cached result)
           try {
-            const { text } = await extractAndCache(absPath, attachment.mime_type, attachment.filename, attachment.id);
+            const { text } = await extractAndCache(
+              absPath,
+              attachment.mime_type,
+              attachment.filename,
+              attachment.id,
+              noCache
+            );
             console.log(text);
           } catch (err) {
             console.error(`Failed to extract attachment: ${err instanceof Error ? err.message : String(err)}`);
@@ -1457,7 +1523,7 @@ async function main() {
       } else {
         console.error(`Unknown subcommand: ${subcommand}`);
         console.error("Usage: zmail attachment list <message_id>");
-        console.error("       zmail attachment read <message_id> <index_or_filename> [--raw]");
+        console.error("       zmail attachment read <message_id> <index_or_filename> [--raw] [--no-cache]");
         process.exit(1);
       }
       break;

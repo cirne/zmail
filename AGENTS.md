@@ -142,8 +142,10 @@ Search uses hybrid (semantic + FTS) by default for comprehensive results. Use `-
 
 zmail stores configuration in `~/.zmail/` (or `$ZMAIL_HOME` if set):
 
-- `~/.zmail/config.json` — non-secret settings (IMAP host/port/user, sync settings)
+- `~/.zmail/config.json` — non-secret settings (IMAP host/port/user, sync settings, optional `attachments.cacheExtractedText`)
 - `~/.zmail/.env` — secrets (ZMAIL_IMAP_PASSWORD, ZMAIL_OPENAI_API_KEY)
+
+Attachment extracted-text cache is **off by default** (each read re-extracts). To use cached extraction on repeat reads, set `"attachments": { "cacheExtractedText": true }` in config.json.
 
 Run `zmail setup` (with flags/env) or `zmail wizard` (interactive) to create these files:
 

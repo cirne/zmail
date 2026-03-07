@@ -1,6 +1,6 @@
 # BUG-008: `zmail who` Case-Sensitive Email Deduplication — Agent-Reported
 
-**Status:** Open.
+**Status:** Fixed (Verified 2026-03-07).
 
 **Design lens:** [Agent-first](../VISION.md) — agents need accurate, deduplicated contact data; case-sensitive email addresses create confusion and duplicate entries for the same person.
 
@@ -45,6 +45,15 @@
 ## Additional Notes
 
 - Related: `noreply@email.apple.com` shows up as "Kirsten Vliet" because Apple sends shared album notifications using the sharer's display name. This is a harder problem (see feature request for identity merging in [OPP-012](../opportunities/OPP-012-who-smart-address-book.md)).
+
+---
+
+## Verification
+
+- **Status:** Verified
+- **Date:** 2026-03-07
+- **Result:** Fix confirmed. `zmail who "cirne"` now returns a single Lewis Cirne entry with all 8 addresses merged (including gmail+ variants). No more case-variant duplicates like `LEWISCIRNE@MAC.COM`. All addresses normalized to lowercase.
+- **Tested with:** `zmail who "cirne"`
 
 ---
 

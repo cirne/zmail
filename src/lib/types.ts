@@ -78,13 +78,20 @@ export interface SearchResult {
   rank: number;
 }
 
-/** One identity from `zmail who`: address + best-known display name and counts. */
+/** One identity from `zmail who`: merged person with all addresses, contact info, and counts. */
 export interface WhoPerson {
-  address: string;
-  displayName: string | null;
+  name: string | null;
+  aka: string[];
+  primaryAddress: string;
+  addresses: string[];
+  phone: string | null;
+  title: string | null;
+  company: string | null;
+  urls: string[];
   sentCount: number;
   receivedCount: number;
   mentionedCount: number;
+  lastContact: string | null;
 }
 
 /** Result of who(db, { query, ... }). */

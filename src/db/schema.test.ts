@@ -21,7 +21,7 @@ describe("database schema", () => {
       expect(names).toContain("messages");
       expect(names).toContain("threads");
       expect(names).toContain("attachments");
-      expect(names).toContain("contacts");
+      expect(names).toContain("people");
       expect(names).toContain("sync_state");
       expect(names).toContain("sync_windows");
       expect(names).toContain("sync_summary");

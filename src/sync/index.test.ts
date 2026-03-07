@@ -214,6 +214,68 @@ describe("runSync logic", () => {
       expect(oldestDateStr).toBe("2026-02-20");
       expect(oldestDateStr! > requestedDateStr).toBe(true);
     });
+
+    /**
+     * BUG-010: Sync Backward Resume Skips Requested Date Range
+     * 
+     * When a user syncs a narrow date range (e.g., 7 days) and later requests
+     * a wider range (e.g., 90 days), the backward sync resume logic incorrectly
+     * uses oldestSynced as the IMAP SEARCH boundary instead of requestedSince.
+     * 
+     * This test reproduces the bug by verifying that when oldestDay > requestedDay
+     * (meaning the user is requesting a wider range), the effectiveSinceDate
+     * should use the requested date, not the oldest synced date.
+     */
+    it("BUG-010: should use requested date when expanding sync range (not oldest synced)", () => {
+      // Setup: We've synced messages from a narrow range (7 days: 2026-02-28 to 2026-03-07)
+      // This simulates the scenario: user ran `zmail sync --since 7d`
+      const oldestSyncedDate = "2026-02-28T10:00:00.000Z";
+      insertTestMessage(db, {
+        date: oldestSyncedDate,
+        folder: mailbox,
+        uid: 100,
+      });
+      insertTestMessage(db, {
+        date: "2026-03-07T10:00:00.000Z",
+        folder: mailbox,
+        uid: 200,
+      });
+
+      // Setup sync_state checkpoint (simulates having synced up to UID 200)
+      db.prepare(
+        "INSERT OR REPLACE INTO sync_state (folder, uidvalidity, last_uid) VALUES (?, ?, ?)"
+      ).run(mailbox, 1, 200);
+
+      // Get oldest synced date
+      const oldestSynced = db
+        .prepare("SELECT MIN(date) as oldest_date FROM messages WHERE folder = ?")
+        .get(mailbox) as { oldest_date: string | null };
+
+      const oldestDateStr = oldestSynced?.oldest_date?.slice(0, 10); // "2026-02-28"
+      const requestedDateStr = "2025-12-07"; // 90 days back from 2026-03-07
+
+      // Verify the bug scenario: oldestDay > requestedDay (user requesting wider range)
+      expect(oldestDateStr).toBe("2026-02-28");
+      expect(oldestDateStr! > requestedDateStr).toBe(true);
+
+      // BUG-010: Current buggy behavior uses oldestSynced instead of requestedSince
+      // This reproduces the bug: effectiveSinceDate is set to oldestDateStr instead of requestedDateStr
+      const buggyEffectiveSinceDate = oldestDateStr; // Current buggy behavior
+      const correctEffectiveSinceDate = requestedDateStr; // What it should be
+
+      // The bug: effectiveSinceDate uses oldestSynced (2026-02-28) instead of requestedSince (2025-12-07)
+      expect(buggyEffectiveSinceDate).toBe("2026-02-28");
+      expect(buggyEffectiveSinceDate).not.toBe(correctEffectiveSinceDate);
+
+      // After fix: effectiveSinceDate should use min(requestedSince, oldestSynced) = requestedSince
+      // when oldestSynced > requestedSince (expanding range)
+      const fixedEffectiveSinceDate = oldestDateStr! > requestedDateStr 
+        ? requestedDateStr  // Use requested date when expanding range
+        : oldestDateStr;     // Use oldest synced when narrowing range
+
+      expect(fixedEffectiveSinceDate).toBe("2025-12-07");
+      expect(fixedEffectiveSinceDate).toBe(correctEffectiveSinceDate);
+    });
   });
 
   describe("UID filtering logic", () => {

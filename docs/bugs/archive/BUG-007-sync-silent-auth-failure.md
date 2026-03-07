@@ -1,6 +1,6 @@
 # BUG-007: Sync Silent Authentication Failure — Agent-Reported
 
-**Status:** Fixed.
+**Status:** Fixed. Verified 2026-03-07; closed.
 
 **Design lens:** [Agent-first](../VISION.md) — silent failures are especially harmful for LLM agents; without an error message, the agent cannot self-correct or understand what went wrong. This is the most critical onboarding bug: a user who typos their password will think everything worked, proceed to search, get 0 results, and have no idea why.
 

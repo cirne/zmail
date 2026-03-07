@@ -39,6 +39,10 @@ interface ConfigJson {
     mailbox?: string;
     excludeLabels?: string[];
   };
+  /** When true, use cached extracted_text for attachment read (faster repeat reads). Default false = always re-extract. */
+  attachments?: {
+    cacheExtractedText?: boolean;
+  };
 }
 
 /** Load config.json from ZMAIL_HOME/config.json. Returns empty object if missing. */
@@ -81,6 +85,10 @@ export const config = {
     mailbox: configJson.sync?.mailbox ?? "",
     /** Comma-separated labels to exclude (e.g. Trash,Spam). Case-insensitive. Default: Trash,Spam. */
     excludeLabels: configJson.sync?.excludeLabels ?? ["trash", "spam"],
+  },
+  /** Attachment extraction cache is off by default. Set attachments.cacheExtractedText to true in config.json to use cached extracted text on repeat reads. */
+  attachments: {
+    cacheExtractedText: configJson.attachments?.cacheExtractedText ?? false,
   },
   get openai() {
     return { apiKey: getOpenAIKey() };

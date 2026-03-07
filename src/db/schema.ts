@@ -41,11 +41,24 @@ export const SCHEMA = /* sql */ `
     extracted_text  TEXT
   );
 
-  CREATE TABLE IF NOT EXISTS contacts (
-    address      TEXT PRIMARY KEY,
-    display_name TEXT,
-    message_count INTEGER NOT NULL DEFAULT 1
+  CREATE TABLE IF NOT EXISTS people (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    canonical_name  TEXT,
+    aka             TEXT NOT NULL DEFAULT '[]',
+    primary_address TEXT NOT NULL,
+    addresses       TEXT NOT NULL DEFAULT '[]',
+    phone           TEXT,
+    title           TEXT,
+    company         TEXT,
+    urls            TEXT NOT NULL DEFAULT '[]',
+    sent_count      INTEGER NOT NULL DEFAULT 0,
+    received_count  INTEGER NOT NULL DEFAULT 0,
+    mentioned_count INTEGER NOT NULL DEFAULT 0,
+    last_contact    TEXT,
+    is_noreply      INTEGER NOT NULL DEFAULT 0,
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
   );
+  CREATE INDEX IF NOT EXISTS idx_people_name ON people(canonical_name);
 
   CREATE TABLE IF NOT EXISTS sync_state (
     folder       TEXT PRIMARY KEY,

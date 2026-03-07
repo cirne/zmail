@@ -1,8 +1,8 @@
 # BUG-006: Sync Repeated "Connecting" Message in Non-TTY Mode — Agent-Reported
 
-**Status:** Open.
+**Status:** Fixed. Verified 2026-03-07; closed.
 
-**Design lens:** [Agent-first](../VISION.md) — agents run commands via subprocess with non-TTY stdio; TTY-specific output tricks degrade poorly and create confusing repeated messages.
+**Design lens:** [Agent-first](../../VISION.md) — agents run commands via subprocess with non-TTY stdio; TTY-specific output tricks degrade poorly and create confusing repeated messages.
 
 **Reported context:** Agent on macOS (Darwin 25.3.0); running `zmail sync` from Claude Code subprocess (non-TTY stdio). Reproducibility: Always (in non-TTY mode).
 
@@ -48,7 +48,13 @@
 
 ---
 
+## Fix
+
+Guarded status writes in `src/cli/index.ts` (background sync poll loop) with `process.stdout.isTTY`. In non-TTY mode, "Connecting to IMAP server..." and "Waiting for email... X synced" are each printed at most once.
+
+---
+
 ## References
 
-- Vision (agent-first): [VISION.md](../VISION.md)
+- Vision (agent-first): [VISION.md](../../VISION.md)
 - Related: [BUG-007](BUG-007-sync-silent-auth-failure.md), [BUG-009](BUG-009-wizard-crash-non-interactive.md)

@@ -147,6 +147,10 @@ For each feedback file:
 ### 5. Clean Up
 
 After processing:
+- **Annotate feedback file with bug/opportunity ID** — Before moving to `submitted/`, add a note at the top of the feedback file indicating which bug or opportunity ID it relates to:
+  - If matched existing bug/opportunity: Add `**Related:** BUG-XXX` or `**Related:** OPP-XXX` at the top
+  - If created new bug/opportunity: Add `**Related:** BUG-XXX` or `**Related:** OPP-XXX` at the top
+  - Format: Add as a frontmatter field or as a header note (e.g., `**Processed as:** BUG-XXX` or `**Related:** OPP-XXX`)
 - **Update `docs/feedback-processed.md`** — add entry with filename, date, action taken, and related bug/opportunity ID
 - **Move processed feedback to `submitted/` subdirectory** — prefer moving to `../ztest/feedback/submitted/` rather than deleting (preserves feedback for reference)
   - Create `../ztest/feedback/submitted/` directory if it doesn't exist: `mkdir -p ../ztest/feedback/submitted`
@@ -172,10 +176,14 @@ grep -r "semantic search" docs/bugs/ docs/opportunities/
 # 5. Update index files
 # Edit docs/BUGS.md or docs/OPPORTUNITIES.md
 
-# 6. Update processed feedback tracker
+# 6. Annotate feedback file with bug/opportunity ID
+# Add "**Related:** BUG-XXX" or "**Related:** OPP-XXX" at the top of the feedback file
+# Example: echo "**Related:** BUG-003\n\n$(cat ../ztest/feedback/ux-semantic-search-guidance.md)" > ../ztest/feedback/ux-semantic-search-guidance.md
+
+# 7. Update processed feedback tracker
 # Edit docs/feedback-processed.md
 
-# 7. Move processed feedback to submitted/
+# 8. Move processed feedback to submitted/
 mkdir -p ../ztest/feedback/submitted
 mv ../ztest/feedback/ux-semantic-search-guidance.md ../ztest/feedback/submitted/ux-semantic-search-guidance.md
 ```
@@ -199,4 +207,5 @@ mv ../ztest/feedback/ux-semantic-search-guidance.md ../ztest/feedback/submitted/
 - **Semantic matching**: When checking for duplicates, look for similar problems/areas, not just exact title matches. Read full bug/opportunity content, not just titles.
 - **Archive check**: Always check archive directories — if something is already fixed/implemented, the feedback has been processed and should be moved to `submitted/`.
 - **File cleanup**: Always move processed feedback to `../ztest/feedback/submitted/` rather than deleting. This preserves an audit trail and allows reference back to original feedback. Only process files in `../ztest/feedback/*.md` (not files already in `submitted/`).
+- **Annotate with ID**: Before moving feedback to `submitted/`, annotate the feedback file itself with the bug or opportunity ID (e.g., `**Related:** BUG-XXX` or `**Related:** OPP-XXX`). This makes it easy to trace which bug/opportunity the feedback relates to when reviewing submitted feedback. Use the bug/opportunity ID, not the filename.
 - **When in doubt**: If unsure whether feedback matches an existing bug/opportunity, err on the side of not creating a duplicate. Skip processing rather than risk duplicate entries.

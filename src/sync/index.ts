@@ -400,33 +400,33 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
               const requestedDay = fromDate;
               
               if (oldestDay > requestedDay) {
-                // We've already synced messages from a day newer than requested
-                // Resume from the oldest synced date (same day is OK - allows catching gaps from interrupted syncs)
-                effectiveSinceDate = new Date(oldestDateStr + "T00:00:00Z");
-                effectiveSinceDateStr = oldestDateStr;
+                // User is requesting a wider range than what's already synced (oldestDay > requestedDay)
+                // Use the requested date as the search boundary to fetch the unfetched date range
+                // UID filtering will still correctly skip already-fetched messages
+                effectiveSinceDate = new Date(fromDate + "T00:00:00Z");
+                effectiveSinceDateStr = fromDate;
                 
                 // If we have a last_uid checkpoint, use UID-based filtering to avoid re-fetching messages we already have
                 // This is much more efficient than fetching all messages from the day and deduplicating
                 if (state && Number(state.uidvalidity) === uidvalidity && Number(state.last_uid) > 0) {
-                  // For backward sync, we want messages older than what we've synced
-                  // But we still need to search the same day to catch gaps, so we'll filter by UID
-                  // Search for messages in the date range, but we'll filter UIDs after getting results
+                  // Search from the requested date to include the unfetched range
+                  // UID filtering will skip messages we've already synced
                   searchQuery = { since: effectiveSinceDate };
                   
-                  fileLogger.info("Resuming backward sync from oldest synced date with UID filtering", {
+                  fileLogger.info("Expanding sync range backward with UID filtering", {
                     requestedSince: fromDate,
                     oldestSynced: oldestDateStr,
-                    resumingFrom: effectiveSinceDateStr,
+                    searchingFrom: effectiveSinceDateStr,
                     lastUid: state.last_uid,
                     note: "Will filter UIDs <= last_uid to avoid re-fetching already-synced messages",
                   });
                 } else {
                   searchQuery = { since: effectiveSinceDate };
                   
-                  fileLogger.info("Resuming backward sync from oldest synced date", {
+                  fileLogger.info("Expanding sync range backward", {
                     requestedSince: fromDate,
                     oldestSynced: oldestDateStr,
-                    resumingFrom: effectiveSinceDateStr,
+                    searchingFrom: effectiveSinceDateStr,
                     note: "No UID checkpoint - will fetch and deduplicate",
                   });
                 }
@@ -835,6 +835,9 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
         totalMs: durationMs,
       });
       
+      // Note: People profiles are built dynamically on-demand (no pre-computed index)
+      // This ensures results are always current and improve as more data is indexed.
+
       fileLogger.close();
 
       return result;

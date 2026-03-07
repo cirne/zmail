@@ -18,6 +18,7 @@ See [VISION.md](./VISION.md) for product vision, [ARCHITECTURE.md](./ARCHITECTUR
 | [OPP-010](opportunities/OPP-010-sync-performance.md) | Sync / Refresh Performance — 5x Faster | Achieved 5x faster "nothing new" refreshes (42s → 8.2s) via STATUS fast path, EXAMINE instead of SELECT, parallel connect, and batch optimizations. See [SYNC.md](./SYNC.md) for implementation details. |
 | [OPP-011](opportunities/OPP-011-send-email.md) | Send Email — Draft + SMTP | Add send via SMTP (send-as-user). Draft + confirm, voice profile from history, tagline. **Blocked on customer validation for core search/index/onboarding.** |
 | [OPP-012](opportunities/OPP-012-who-smart-address-book.md) | Make `zmail who` a Smart, Unified Address Book | Evolve `zmail who` into identity-aware contact graph: case-insensitive dedup, identity merging, signature extraction (phone/title/company), relationship scoring, noreply filtering. |
+| [OPP-013](opportunities/OPP-013-who-name-inference-from-address.md) | Name Inference from Email Addresses | Infer display names from email addresses (e.g., `lewis.cirne@...` → "Lewis Cirne") as fallback when no header name exists. Enables identity merging for addresses without display names. |
 
 ---
 

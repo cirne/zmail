@@ -9,91 +9,6 @@ export type SqliteDatabase = InstanceType<typeof Database>;
 
 let _db: SqliteDatabase | null = null;
 
-interface SchemaColumnRequirement {
-  table: string;
-  column: string;
-}
-
-const REQUIRED_SCHEMA_COLUMNS: SchemaColumnRequirement[] = [
-  {
-    table: "messages",
-    column: "labels",
-  },
-  {
-    table: "messages",
-    column: "to_addresses",
-  },
-  {
-    table: "messages",
-    column: "cc_addresses",
-  },
-  {
-    table: "messages",
-    column: "embedding_state",
-  },
-  {
-    table: "sync_summary",
-    column: "owner_pid",
-  },
-  {
-    table: "indexing_status",
-    column: "owner_pid",
-  },
-];
-
-export interface MissingSchemaColumn {
-  table: string;
-  column: string;
-}
-
-function tableExists(db: SqliteDatabase, tableName: string): boolean {
-  const row = db
-    .prepare(
-      "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1"
-    )
-    .get(tableName);
-  return !!row;
-}
-
-/**
- * Detect required columns that are missing from existing tables.
- * We only check tables that already exist, so brand-new DBs can bootstrap normally.
- */
-export function detectMissingSchemaColumns(db: SqliteDatabase): MissingSchemaColumn[] {
-  const missing: MissingSchemaColumn[] = [];
-
-  for (const req of REQUIRED_SCHEMA_COLUMNS) {
-    if (!tableExists(db, req.table)) continue;
-
-    const cols = db
-      .prepare(`PRAGMA table_info(${req.table})`)
-      .all() as Array<{ name: string }>;
-    const hasColumn = cols.some((c) => c.name === req.column);
-    if (!hasColumn) {
-      missing.push({
-        table: req.table,
-        column: req.column,
-      });
-    }
-  }
-
-  return missing;
-}
-
-export function formatSchemaDriftError(
-  dbPath: string,
-  dataDir: string,
-  missingColumns: MissingSchemaColumn[]
-): string {
-  const columns = missingColumns.map((c) => `${c.table}.${c.column}`).join(", ");
-  return [
-    `Detected schema drift in existing DB at ${dbPath}.`,
-    `Missing required column(s): ${columns}.`,
-    "This project does not run automatic migrations for existing DBs.",
-    `Recommended fix: rebuild local data from scratch with "rm -rf ${dataDir}" and sync again.`,
-  ].join("\n");
-}
-
 export function getDb(): SqliteDatabase {
   if (_db) return _db;
 
@@ -106,27 +21,7 @@ export function getDb(): SqliteDatabase {
   // Allow wait up to 15s for lock (workers and sync share the DB; avoids "database is locked")
   _db.exec("PRAGMA busy_timeout = 15000");
 
-  const missingColumns = detectMissingSchemaColumns(_db);
-  if (missingColumns.length > 0) {
-    const driftMessage = formatSchemaDriftError(config.dbPath, config.dataDir, missingColumns);
-    logger.error(driftMessage);
-    throw new Error(driftMessage);
-  }
-
   _db.exec(SCHEMA);
-
-  // Migrate: add new columns to sync_summary if they don't exist
-  for (const column of ["target_start_date", "sync_start_earliest_date"]) {
-    try {
-      _db.exec(`ALTER TABLE sync_summary ADD COLUMN ${column} TEXT`);
-    } catch (err) {
-      // Column already exists, ignore (SQLite error: "duplicate column name: ...")
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.toLowerCase().includes("duplicate column")) {
-        throw err;
-      }
-    }
-  }
 
   // Ensure singleton status rows exist
   _db.exec(

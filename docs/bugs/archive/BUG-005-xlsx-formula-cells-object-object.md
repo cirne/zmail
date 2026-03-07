@@ -1,6 +1,6 @@
 # BUG-005: XLSX Formula Cells Render as `[object Object]` — Agent-Reported
 
-**Status:** Open.
+**Status:** Fixed, verified (2026-03-07).
 
 **Design lens:** [Agent-first](../VISION.md) — agents lose critical numeric data from spreadsheets; for financial/accounting workflows, this data loss is significant.
 
@@ -45,6 +45,16 @@ The XLSX extractor (`src/attachments/index.ts`, `XlsxExtractor`) uses `row.value
 High — the agent loses critical numeric data. In the reported case, all USD conversion amounts were missing, requiring manual calculation from the exchange rate.
 
 ---
+
+## Fix
+
+Fixed in `src/attachments/index.ts` by handling formula cell objects properly:
+- Check if cell value is an object (excluding Date)
+- Extract computed result from `result`, `value`, or `w` properties
+- Fallback to `cell.text` if object structure is unexpected
+- Preserves original behavior for primitive values and dates
+
+**Commit:** Fixed XLSX formula cell extraction to handle object values (2026-03-07). Verified with `--no-cache`; all formula/currency cells now render correctly.
 
 ## References
 

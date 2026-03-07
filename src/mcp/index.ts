@@ -257,14 +257,15 @@ export function createMcpServer() {
 
   server.tool(
     "who",
-    "Find people by email address or display name. Returns matching identities with sent/received/mentioned counts. Useful for 'who is X?' queries.",
+    "Find people by email address or display name. Returns merged identities with contact info, sent/received/mentioned counts. Useful for 'who is X?' queries.",
     {
       query: z.string().describe("Search query to match against email addresses or display names"),
       limit: z.number().optional().describe("Maximum number of results to return (default: 50)"),
       minSent: z.number().optional().describe("Minimum sent count filter (default: 0)"),
       minReceived: z.number().optional().describe("Minimum received count filter (default: 0)"),
+      includeNoreply: z.boolean().optional().describe("Include noreply/bot addresses (default: false)"),
     },
-    async ({ query, limit, minSent, minReceived }) => {
+    async ({ query, limit, minSent, minReceived, includeNoreply }) => {
       const db = getDb();
       const ownerAddress = config.imap.user?.trim() || undefined;
       const result = who(db, {
@@ -272,6 +273,7 @@ export function createMcpServer() {
         limit,
         minSent,
         minReceived,
+        includeNoreply,
         ownerAddress,
       });
 

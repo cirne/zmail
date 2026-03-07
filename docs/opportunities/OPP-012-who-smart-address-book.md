@@ -1,31 +1,33 @@
 # OPP-012: Make `zmail who` a Smart, Unified Address Book
 
+**Status:** Partial — Tiers 1-2 complete, Tiers 3-4 remaining.
+
 **Problem:** As an agent, `zmail who` is my only way to answer "who is this person?" or "how do I reach them?" Right now it returns raw per-address rows with no identity merging, no contact metadata, and no way to distinguish a real person from a noreply address. For `who` to become a true address book — the agent's de facto contact lookup — it needs to evolve significantly.
 
 **Example:** `zmail who "cirne"` returns 8 separate rows for what is clearly one person across `@gmail.com`, `@mac.com`, `@icloud.com`, `@me.com`, `@alum.dartmouth.org`. `noreply@email.apple.com` shows up as "Kirsten Vliet" because Apple sends notifications using the sharer's display name. Automated senders pollute the people index.
 
 **Proposed direction:** Evolve `zmail who` into an identity-aware contact graph with multiple tiers of enhancement:
 
-### Tier 1: Core fixes (low effort, high impact)
+### Tier 1: Core fixes (low effort, high impact) ✅ **COMPLETE**
 
-- **Case-insensitive dedup** — Normalize email addresses to lowercase at index time (addresses [BUG-008](../bugs/BUG-008-who-case-sensitive-email-dedup.md))
-- **Filter noreply/automated senders** — Flag or deprioritize addresses matching `noreply@`, `no-reply@`, `mailer-daemon@`, etc.
-- **Add `lastContact` timestamp** — When was the last email to/from this person?
-- **Add `relationship` score** — Simple heuristic: `sentCount * 3 + receivedCount * 2 + mentionedCount` (weighting direct communication higher)
+- ✅ **Case-insensitive dedup** — Normalize email addresses to lowercase at index time (addresses [BUG-008](../bugs/archive/BUG-008-who-case-sensitive-email-dedup.md))
+- ✅ **Filter noreply/automated senders** — Flag or deprioritize addresses matching `noreply@`, `no-reply@`, `mailer-daemon@`, etc. (addresses [BUG-013](../bugs/archive/BUG-013-who-noreply-display-name-leaks.md))
+- ✅ **Add `lastContact` timestamp** — When was the last email to/from this person?
+- ⚠️ **Add `relationship` score** — Simple heuristic: `sentCount * 3 + receivedCount * 2 + mentionedCount` (weighting direct communication higher) — *Not yet implemented*
 
-### Tier 2: Identity merging (medium effort, high impact)
+### Tier 2: Identity merging (medium effort, high impact) ✅ **COMPLETE**
 
-- **Auto-merge by name** — When two addresses share the same `displayName` (exact or fuzzy match) and aren't noreply addresses, link them as the same person
-- **AKA field** — `"aka": ["Kirsten Cirne", "Kirsten Vliet"]` — track all display names seen for a person
-- **Domain grouping** — Show which organizations a person is associated with: `"orgs": ["greenlonghorninc.com", "gmail.com"]`
-- **Manual merge/split** — `zmail who merge <addr1> <addr2>` and `zmail who split <addr>` for corrections
+- ✅ **Auto-merge by name** — When two addresses share the same `displayName` (exact or fuzzy match) and aren't noreply addresses, link them as the same person
+- ✅ **AKA field** — `"aka": ["Kirsten Cirne", "Kirsten Vliet"]` — track all display names seen for a person
+- ⚠️ **Domain grouping** — Show which organizations a person is associated with: `"orgs": ["greenlonghorninc.com", "gmail.com"]` — *Not yet implemented*
+- ⚠️ **Manual merge/split** — `zmail who merge <addr1> <addr2>` and `zmail who split <addr>` for corrections — *Not yet implemented*
 
-### Tier 3: Signature extraction (medium effort, high value)
+### Tier 3: Signature extraction (medium effort, high value) ⚠️ **PARTIAL**
 
-- **Phone numbers** — Parse email signatures for phone numbers: `"phone": ["+1-555-123-4567"]`
-- **Title / role** — Extract from signatures: `"title": "CEO, Green Longhorn Inc."`
-- **Company** — From signature or domain: `"company": "Green Longhorn Inc."`
-- **Social links** — LinkedIn, Twitter URLs from signatures
+- ✅ **Phone numbers** — Parse email signatures for phone numbers: `"phone": ["+1-555-123-4567"]` — *Implemented but needs more testing*
+- ✅ **Title / role** — Extract from signatures: `"title": "CEO, Green Longhorn Inc."` — *Implemented with boilerplate filtering* (addresses [BUG-014](../bugs/archive/BUG-014-who-signature-parser-noise.md))
+- ✅ **Company** — From signature or domain: `"company": "Green Longhorn Inc."` — *Implemented with boilerplate filtering*
+- ✅ **Social links** — LinkedIn, Twitter URLs from signatures — *Implemented with tracking URL filtering*
 
 ### Tier 4: Smart queries (lower priority, polishes the experience)
 
@@ -121,5 +123,5 @@ Massive. Currently, an agent doing any people-related task (draft an email, find
 ## References
 
 - Vision (agent-first): [VISION.md](../VISION.md)
-- Related: [BUG-008](../bugs/BUG-008-who-case-sensitive-email-dedup.md) — Case-sensitive email dedup (Tier 1)
+- Related: [BUG-008](../bugs/archive/BUG-008-who-case-sensitive-email-dedup.md) — Case-sensitive email dedup (Tier 1)
 - Related: [OPP-004](../opportunities/archive/OPP-004-people-index-contacts.md) — People Index and Contacts (basic `who` implemented)
