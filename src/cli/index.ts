@@ -4,7 +4,7 @@ import { who } from "~/search/who";
 import { indexMessages } from "~/search/indexing";
 import { getDb } from "~/db";
 import { startMcpServer } from "~/mcp";
-import { config, requireImapConfig } from "~/lib/config";
+import { config } from "~/lib/config";
 import { logger } from "~/lib/logger";
 import { parseSinceToDate } from "~/sync/parse-since";
 import { htmlToMarkdown } from "~/lib/content-normalize";
@@ -15,7 +15,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { formatMessageLlmFriendly } from "~/cli/format-message";
 import { extractAndCache } from "~/attachments";
-import { ImapFlow } from "imapflow";
+import { getStatus, getImapServerStatus } from "~/lib/status";
 
 // When invoked as "tsx index.ts -- <cmd>", argv[2] is "--" and argv[3] is the command
 const rest = process.argv.slice(2);
@@ -927,132 +927,74 @@ async function main() {
     }
 
     case "status": {
+      const showImapStatus = args.includes("--imap") || args.includes("--server");
+      
       const db = getDb();
-      const syncStatus = db.prepare("SELECT * FROM sync_summary WHERE id = 1").get() as {
-        earliest_synced_date: string | null;
-        latest_synced_date: string | null;
-        total_messages: number;
-        last_sync_at: string | null;
-        is_running: number;
-      };
-      const indexStatus = db.prepare("SELECT * FROM indexing_status WHERE id = 1").get() as {
-        is_running: number;
-        total_to_index: number;
-        indexed_so_far: number;
-        started_at: string | null;
-        completed_at: string | null;
-      };
+      const status = getStatus(db);
 
       // Sync status
-      if (syncStatus.is_running) {
+      if (status.sync.isRunning) {
         console.log(`Sync:      running`);
-      } else if (syncStatus.last_sync_at) {
-        console.log(`Sync:      idle (last: ${syncStatus.last_sync_at.slice(0, 10)}, ${syncStatus.total_messages} messages)`);
+      } else if (status.sync.lastSyncAt) {
+        console.log(`Sync:      idle (last: ${status.sync.lastSyncAt.slice(0, 10)}, ${status.sync.totalMessages} messages)`);
       } else {
         console.log(`Sync:      never run`);
       }
 
-      // Indexing status - always use messages table as source of truth
-      const totalIndexed = db.prepare("SELECT COUNT(*) as count FROM messages WHERE embedding_state = 'done'").get() as { count: number };
-      const totalFailed = db.prepare("SELECT COUNT(*) as count FROM messages WHERE embedding_state = 'failed'").get() as { count: number };
-      const pendingCount = db.prepare("SELECT COUNT(*) as count FROM messages WHERE embedding_state = 'pending'").get() as { count: number };
-      
-      if (indexStatus.is_running) {
+      // Indexing status
+      if (status.indexing.isRunning) {
         // SQLite datetime('now') is UTC but has no 'Z'; parse as UTC to avoid negative elapsed (local-time parse)
-        const startedMs = indexStatus.started_at
-          ? (indexStatus.started_at.includes("Z") || indexStatus.started_at.includes("+")
-              ? new Date(indexStatus.started_at).getTime()
-              : new Date(indexStatus.started_at.replace(" ", "T") + "Z").getTime())
+        const startedMs = status.indexing.startedAt
+          ? (status.indexing.startedAt.includes("Z") || status.indexing.startedAt.includes("+")
+              ? new Date(status.indexing.startedAt).getTime()
+              : new Date(status.indexing.startedAt.replace(" ", "T") + "Z").getTime())
           : 0;
         const elapsed = startedMs ? Math.round((Date.now() - startedMs) / 1000) : 0;
         // total_to_index can be 0 when sync+index start together (pending was 0 at start); use live total for display
-        const displayTotal = Math.max(indexStatus.total_to_index, indexStatus.indexed_so_far + pendingCount.count);
-        console.log(`Indexing:  running (${indexStatus.indexed_so_far}/${displayTotal} indexed${totalFailed.count > 0 ? `, ${totalFailed.count} failed` : ''}, ${elapsed}s elapsed)`);
-      } else if (indexStatus.completed_at) {
-        console.log(`Indexing:  idle (last: ${indexStatus.completed_at.slice(0, 10)}, ${totalIndexed.count} indexed${totalFailed.count > 0 ? `, ${totalFailed.count} failed` : ''})`);
+        const displayTotal = Math.max(status.indexing.totalToIndex, status.indexing.indexedSoFar + status.indexing.pending);
+        console.log(`Indexing:  running (${status.indexing.indexedSoFar}/${displayTotal} indexed${status.indexing.totalFailed > 0 ? `, ${status.indexing.totalFailed} failed` : ''}, ${elapsed}s elapsed)`);
+      } else if (status.indexing.completedAt) {
+        console.log(`Indexing:  idle (last: ${status.indexing.completedAt.slice(0, 10)}, ${status.indexing.totalIndexed} indexed${status.indexing.totalFailed > 0 ? `, ${status.indexing.totalFailed} failed` : ''})`);
       } else {
         console.log(`Indexing:  never run`);
       }
 
-      // Search readiness: use live counts (sync_summary.total_messages only updates when sync completes)
-      const messagesCount = db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number };
-      const ftsCount = messagesCount.count;
-      const semanticCount = totalIndexed.count;
-      console.log(`Search:    FTS ready (${ftsCount}) | Semantic ready (${semanticCount})`);
+      // Search readiness
+      console.log(`Search:    FTS ready (${status.search.ftsReady}) | Semantic ready (${status.search.semanticReady})`);
 
-      const dateRange = db.prepare("SELECT MIN(date) as earliest, MAX(date) as latest FROM messages").get() as {
-        earliest: string | null;
-        latest: string | null;
-      };
-      if (dateRange.earliest && dateRange.latest) {
-        const earliest = dateRange.earliest.slice(0, 10);
-        const latest = dateRange.latest.slice(0, 10);
+      // Date range
+      if (status.dateRange) {
+        const earliest = status.dateRange.earliest.slice(0, 10);
+        const latest = status.dateRange.latest.slice(0, 10);
         console.log(`Range:     ${earliest} .. ${latest}`);
       }
 
-      // Compare with server using STATUS
-      try {
-        const imap = requireImapConfig();
-        if (imap.user && imap.password) {
-          const mailbox = config.sync.mailbox || (imap.host.toLowerCase().includes("gmail") ? "[Gmail]/All Mail" : "INBOX");
+      // Compare with server using STATUS (only if flag is provided)
+      if (showImapStatus) {
+        const imapComparison = await getImapServerStatus(db);
+        if (imapComparison) {
+          console.log("");
+          console.log("Server comparison:");
+          console.log(`  Server:   ${imapComparison.server.messages} messages, UIDNEXT=${imapComparison.server.uidNext ?? 'unknown'}, UIDVALIDITY=${imapComparison.server.uidValidity ?? 'unknown'}`);
+          console.log(`  Local:    ${imapComparison.local.messages} messages, last_uid=${imapComparison.local.lastUid ?? 'none'}, UIDVALIDITY=${imapComparison.local.uidValidity ?? 'none'}`);
           
-          const client = new ImapFlow({
-            host: imap.host,
-            port: imap.port,
-            secure: imap.port === 993,
-            auth: { user: imap.user, pass: imap.password },
-            logger: false,
-          });
-
-          try {
-            await client.connect();
-            
-            const statusResult = await client.status(mailbox, { messages: true, uidNext: true, uidValidity: true });
-            const serverMessages = statusResult.messages ?? 0;
-            const serverUidNext = statusResult.uidNext ? Number(statusResult.uidNext) : undefined;
-            const serverUidValidity = statusResult.uidValidity ? Number(statusResult.uidValidity) : undefined;
-            
-            // Get local sync state
-            const syncState = db.prepare("SELECT uidvalidity, last_uid FROM sync_state WHERE folder = ?").get(mailbox) as
-              | { uidvalidity: number | bigint; last_uid: number | bigint }
-              | undefined;
-            
-            const localMessages = messagesCount.count;
-            const localLastUid = syncState ? Number(syncState.last_uid) : undefined;
-            const localUidValidity = syncState ? Number(syncState.uidvalidity) : undefined;
-            
-            console.log("");
-            console.log("Server comparison:");
-            console.log(`  Server:   ${serverMessages} messages, UIDNEXT=${serverUidNext ?? 'unknown'}, UIDVALIDITY=${serverUidValidity ?? 'unknown'}`);
-            console.log(`  Local:    ${localMessages} messages, last_uid=${localLastUid ?? 'none'}, UIDVALIDITY=${localUidValidity ?? 'none'}`);
-            
-            if (serverUidNext && localLastUid && serverUidValidity === localUidValidity) {
-              const missing = serverUidNext - localLastUid - 1;
-              if (missing > 0) {
-                console.log(`  Missing:  ${missing} new message(s) (UIDs ${localLastUid + 1}..${serverUidNext - 1})`);
-              } else {
-                console.log(`  Status:   Up to date (no new messages)`);
-              }
-            } else if (serverUidValidity !== localUidValidity) {
-              console.log(`  Warning:  UIDVALIDITY mismatch - mailbox may have been reset`);
-            }
-            
-            // Calculate how far back we go
-            if (dateRange.earliest) {
-              const earliestDate = new Date(dateRange.earliest);
-              const now = new Date();
-              const daysAgo = Math.floor((now.getTime() - earliestDate.getTime()) / (1000 * 60 * 60 * 24));
-              const yearsAgo = (daysAgo / 365).toFixed(1);
-              console.log(`  Coverage: Goes back ${daysAgo} days (${yearsAgo} years) to ${dateRange.earliest.slice(0, 10)}`);
-            }
-            
-            client.close();
-          } catch (err) {
-            logger.warn("Failed to check server status", { error: String(err) });
+          if (imapComparison.missing !== null && imapComparison.missing > 0 && imapComparison.missingUidRange) {
+            console.log(`  Missing:  ${imapComparison.missing} new message(s) (UIDs ${imapComparison.missingUidRange.start}..${imapComparison.missingUidRange.end})`);
+          } else if (imapComparison.missing === 0) {
+            console.log(`  Status:   Up to date (no new messages)`);
+          }
+          
+          if (imapComparison.uidValidityMismatch) {
+            console.log(`  Warning:  UIDVALIDITY mismatch - mailbox may have been reset`);
+          }
+          
+          if (imapComparison.coverage) {
+            console.log(`  Coverage: Goes back ${imapComparison.coverage.daysAgo} days (${imapComparison.coverage.yearsAgo} years) to ${imapComparison.coverage.earliestDate}`);
           }
         }
-      } catch (err) {
-        // IMAP not configured or connection failed - skip server comparison
+      } else {
+        console.log("");
+        console.log("Hint: Add --imap flag to show IMAP server status (may take 10+ seconds longer)");
       }
       
       break;

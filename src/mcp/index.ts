@@ -8,6 +8,7 @@ import { who } from "~/search/who";
 import { logger } from "~/lib/logger";
 import { extractAndCache } from "~/attachments";
 import { config } from "~/lib/config";
+import { getStatus } from "~/lib/status";
 
 /**
  * Normalizes a message/thread ID to ensure it's wrapped in angle brackets.
@@ -290,94 +291,12 @@ export function createMcpServer() {
     "Get sync and indexing status. Returns current state of sync (running/idle, last sync time, message count), indexing progress, search readiness (FTS/semantic counts), and date range of synced messages.",
     {},
     async () => {
-      const db = getDb();
-      const syncStatus = db.prepare("SELECT * FROM sync_summary WHERE id = 1").get() as {
-        earliest_synced_date: string | null;
-        latest_synced_date: string | null;
-        total_messages: number;
-        last_sync_at: string | null;
-        is_running: number;
-      } | undefined;
-      
-      const indexStatus = db.prepare("SELECT * FROM indexing_status WHERE id = 1").get() as {
-        is_running: number;
-        total_to_index: number;
-        indexed_so_far: number;
-        started_at: string | null;
-        completed_at: string | null;
-      } | undefined;
-
-      // Get live counts from messages table
-      const totalIndexed = db.prepare("SELECT COUNT(*) as count FROM messages WHERE embedding_state = 'done'").get() as { count: number };
-      const totalFailed = db.prepare("SELECT COUNT(*) as count FROM messages WHERE embedding_state = 'failed'").get() as { count: number };
-      const pendingCount = db.prepare("SELECT COUNT(*) as count FROM messages WHERE embedding_state = 'pending'").get() as { count: number };
-      const messagesCount = db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number };
-      
-      const dateRange = db.prepare("SELECT MIN(date) as earliest, MAX(date) as latest FROM messages").get() as {
-        earliest: string | null;
-        latest: string | null;
-      };
-
-      const sync = syncStatus
-        ? {
-            isRunning: syncStatus.is_running === 1,
-            lastSyncAt: syncStatus.last_sync_at,
-            totalMessages: syncStatus.total_messages,
-            earliestSyncedDate: syncStatus.earliest_synced_date,
-            latestSyncedDate: syncStatus.latest_synced_date,
-          }
-        : {
-            isRunning: false,
-            lastSyncAt: null,
-            totalMessages: 0,
-            earliestSyncedDate: null,
-            latestSyncedDate: null,
-          };
-
-      const indexing = indexStatus
-        ? {
-            isRunning: indexStatus.is_running === 1,
-            totalToIndex: indexStatus.total_to_index,
-            indexedSoFar: indexStatus.indexed_so_far,
-            startedAt: indexStatus.started_at,
-            completedAt: indexStatus.completed_at,
-            totalIndexed: totalIndexed.count,
-            totalFailed: totalFailed.count,
-            pending: pendingCount.count,
-          }
-        : {
-            isRunning: false,
-            totalToIndex: 0,
-            indexedSoFar: 0,
-            startedAt: null,
-            completedAt: null,
-            totalIndexed: 0,
-            totalFailed: 0,
-            pending: 0,
-          };
-
-      const search = {
-        ftsReady: messagesCount.count,
-        semanticReady: totalIndexed.count,
-      };
-
-      const result = {
-        sync,
-        indexing,
-        search,
-        dateRange: dateRange?.earliest && dateRange?.latest
-          ? {
-              earliest: dateRange.earliest,
-              latest: dateRange.latest,
-            }
-          : null,
-      };
-
+      const status = getStatus();
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(status, null, 2),
           },
         ],
       };

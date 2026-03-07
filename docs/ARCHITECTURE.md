@@ -93,7 +93,7 @@ zmail search <query> [flags]    ← hybrid search (semantic + FTS) by default; u
                                   Query supports inline operators: from:, to:, subject:, after:, before:
                                   Example: zmail search "from:alice@example.com invoice OR receipt"
 zmail who <query> [flags]        ← find people by address or display name (sent/received/mentioned counts)
-zmail status                    ← sync/indexing/search readiness
+zmail status [--imap]           ← sync/indexing/search readiness (--imap for IMAP server comparison)
 zmail stats                     ← DB stats (volume + top senders/folders)
 zmail read <id> [--raw]         ← read a message (or: zmail message <id>)
 zmail thread <id> [--raw]       ← fetch full thread JSON

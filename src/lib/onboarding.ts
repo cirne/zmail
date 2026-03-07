@@ -16,7 +16,7 @@ Usage:
   zmail refresh                    Refresh: fetch new messages since last sync (frequent updates)
   zmail search <query> [flags]    Search email (hybrid by default; use --fts for exact keyword matching)
   zmail who <query> [flags]       Find people by address or name (use --help for flags)
-  zmail status                    Show sync and indexing status
+  zmail status [--imap]           Show sync and indexing status (--imap for IMAP server comparison, may take 10+ seconds)
   zmail stats                     Show database statistics
   zmail thread <id> [--raw]       Fetch thread (Markdown by default; raw .eml with --raw)
   zmail read <id> [--raw]         Read a message (or: zmail message <id>)
