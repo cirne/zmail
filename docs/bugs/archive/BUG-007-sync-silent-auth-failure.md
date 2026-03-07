@@ -1,6 +1,6 @@
 # BUG-007: Sync Silent Authentication Failure — Agent-Reported
 
-**Status:** Open.
+**Status:** Fixed.
 
 **Design lens:** [Agent-first](../VISION.md) — silent failures are especially harmful for LLM agents; without an error message, the agent cannot self-correct or understand what went wrong. This is the most critical onboarding bug: a user who typos their password will think everything worked, proceed to search, get 0 results, and have no idea why.
 
@@ -64,6 +64,16 @@ After running `zmail setup --no-validate` with invalid credentials, `zmail sync`
 4. **Warn on 0 messages:** When 0 messages are synced, emit a warning suggesting the user check credentials and date range.
 
 ---
+
+## Fix
+
+Fixed by:
+1. Explicitly catching and logging IMAP connection errors in `src/sync/index.ts`
+2. Adding `checkSyncLogForErrors()` function to parse sync log for errors
+3. Checking sync log before printing success message in background sync mode
+4. Adding warnings when 0 messages are synced (may indicate auth failure)
+
+Test case: `src/cli/sync-auth-failure.test.ts` verifies the fix.
 
 ## References
 

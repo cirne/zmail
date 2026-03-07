@@ -11,7 +11,7 @@ import { htmlToMarkdown } from "~/lib/content-normalize";
 import { parseRawMessage } from "~/sync/parse-message";
 import type { SearchResult } from "~/lib/types";
 import type { SqliteDatabase } from "~/db";
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { formatMessageLlmFriendly } from "~/cli/format-message";
 import { extractAndCache } from "~/attachments";
@@ -19,6 +19,48 @@ import { getStatus, getImapServerStatus } from "~/lib/status";
 import { spawn } from "child_process";
 import { isProcessAlive } from "~/lib/process-lock";
 import { SYNC_LOG_PATH } from "~/lib/file-logger";
+
+/**
+ * Check sync log for errors from the most recent sync run.
+ * Returns error info if found, otherwise null.
+ */
+function checkSyncLogForErrors(): { hasError: boolean; errorMessage?: string } {
+  if (!existsSync(SYNC_LOG_PATH)) return { hasError: false };
+  
+  const logContent = readFileSync(SYNC_LOG_PATH, "utf-8");
+  // Check for error entries from the most recent run (after last separator)
+  const runs = logContent.split(/===== SYNC RUN/);
+  const lastRun = runs[runs.length - 1];
+  // Log format: [timestamp] ERROR message {...}
+  // Check for ERROR level log entries
+  const hasError = /ERROR\s+/.test(lastRun) && (
+    lastRun.includes('IMAP connection failed') || 
+    lastRun.includes('Sync failed')
+  );
+  if (hasError) {
+    // Extract error message from log - try multiple patterns
+    let errorMessage = "Sync failed (check log for details)";
+    // Pattern: ERROR IMAP connection failed {"...", "errorMessage": "..."}
+    const errorMatch = lastRun.match(/IMAP connection failed[^{]*"errorMessage":\s*"([^"]+)"/);
+    if (errorMatch) {
+      errorMessage = errorMatch[1];
+    } else {
+      // Pattern: ERROR Sync failed {"...", "error": "..."}
+      const syncFailedMatch = lastRun.match(/Sync failed[^{]*"error":\s*"([^"]+)"/);
+      if (syncFailedMatch) {
+        errorMessage = syncFailedMatch[1];
+      } else {
+        // Fallback: extract any error message from the JSON
+        const anyErrorMatch = lastRun.match(/"error(Message)?":\s*"([^"]+)"/);
+        if (anyErrorMatch) {
+          errorMessage = anyErrorMatch[2];
+        }
+      }
+    }
+    return { hasError: true, errorMessage };
+  }
+  return { hasError: false };
+}
 
 // When invoked as "tsx index.ts -- <cmd>", argv[2] is "--" and argv[3] is the command
 const rest = process.argv.slice(2);
@@ -856,10 +898,34 @@ async function main() {
         console.log('  zmail who "alice"');
       } else if (exitReason === 'done' && isFirstTime) {
         const { count } = db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number };
-        console.log(`\nSync complete! ${count} messages synced and indexed.`);
-        console.log("Try: zmail search \"your query\"  |  zmail who \"name\"");
+        
+        // BUG-007 fix: Check sync log for errors before printing success
+        const logCheck = checkSyncLogForErrors();
+        if (logCheck.hasError) {
+          console.error(`\nSync failed: ${logCheck.errorMessage}`);
+          console.error(`Check log: ${logPath}`);
+          process.exit(1);
+        }
+        
+        if (count === 0) {
+          console.warn("\nWarning: 0 messages synced. This may indicate:");
+          console.warn("  - Invalid IMAP credentials (check with 'zmail setup')");
+          console.warn("  - No messages in the specified date range");
+          console.warn(`  - Check sync log: ${logPath}`);
+        } else {
+          console.log(`\nSync complete! ${count} messages synced and indexed.`);
+          console.log("Try: zmail search \"your query\"  |  zmail who \"name\"");
+        }
       } else if (exitReason === 'timeout') {
-        console.log("\n(Large mailboxes may take longer to connect — sync continues in background)");
+        const { count } = db.prepare("SELECT COUNT(*) as count FROM messages").get() as { count: number };
+        if (count === 0) {
+          console.warn("\nWarning: No messages synced yet. This may indicate:");
+          console.warn("  - Invalid IMAP credentials (check with 'zmail setup')");
+          console.warn("  - Large mailbox taking longer to connect");
+          console.warn(`  - Check sync log: ${logPath}`);
+        } else {
+          console.log("\n(Large mailboxes may take longer to connect — sync continues in background)");
+        }
       }
 
       process.exit(0);

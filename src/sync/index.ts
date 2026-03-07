@@ -218,17 +218,31 @@ export async function runSync(options?: SyncOptions): Promise<SyncResult> {
   }
   
   // Wait for connect to complete
-  await connectPromise;
-  const connectDoneMs = Date.now() - startTime;
-  phaseMs("connect_resolved");
-  fileLogger.info("IMAP connected", { 
-    host: imap.host,
-    connectStartMs,
-    connectDoneMs,
-    lockStartMs,
-    lockDoneMs,
-    overlapMs: Math.max(0, connectDoneMs - lockDoneMs),
-  });
+  try {
+    await connectPromise;
+    const connectDoneMs = Date.now() - startTime;
+    phaseMs("connect_resolved");
+    fileLogger.info("IMAP connected", { 
+      host: imap.host,
+      connectStartMs,
+      connectDoneMs,
+      lockStartMs,
+      lockDoneMs,
+      overlapMs: Math.max(0, connectDoneMs - lockDoneMs),
+    });
+  } catch (err) {
+    // Explicitly catch and log connection/auth errors before they reach outer catch
+    fileLogger.error("IMAP connection failed", { 
+      host: imap.host,
+      port: imap.port,
+      user: imap.user,
+      error: String(err),
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+    releaseLock(db, "sync_summary");
+    fileLogger.close();
+    throw err; // Re-throw so outer catch handles it
+  }
   
   // Check TLS session resumption (Step 7)
   try {
